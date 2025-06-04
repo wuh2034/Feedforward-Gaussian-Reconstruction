@@ -1,0 +1,24 @@
+import torch
+from vggt.models.vggt import VGGT
+from vggt.utils.load_fn import load_and_preprocess_images
+
+# 1. 设备
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# 2. 数据类型：如果 GPU 支持 bfloat16 就用它，否则用 float16
+capability = torch.cuda.get_device_capability()[0] if device == "cuda" else 0
+dtype = torch.bfloat16 if capability >= 8 else torch.float16
+
+# 3. 加载预训练模型（并转到对应 device + dtype）
+model = VGGT.from_pretrained("facebook/VGGT-1B")
+model = model.to(device=device, dtype=dtype)
+
+# 4. 载入并预处理图像列表
+image_paths = ["path/to/imageA.png", "path/to/imageB.png", "path/to/imageC.png"]
+images = load_and_preprocess_images(image_paths).to(device=device, dtype=dtype)
+
+# 5. 推理 (关闭梯度计算，加快速度、节省显存)
+with torch.no_grad():
+    outputs = model(images)
+
+print(outputs.shape)  # 例如 (3, num_classes)
