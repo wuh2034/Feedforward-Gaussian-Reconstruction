@@ -24,7 +24,15 @@ from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+#这里修改成使用mps架构
+#device = "cuda" if torch.cuda.is_available() else "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+print(f"Using device: {device}")
 
 print("Initializing and loading VGGT model...")
 # model = VGGT.from_pretrained("facebook/VGGT-1B")  # another way to load the model
@@ -68,7 +76,14 @@ def run_model(target_dir, model) -> dict:
 
     # Run inference
     print("Running inference...")
-    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    
+    #这里修改成判断是否存在cuda
+    # dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    if torch.cuda.is_available():
+        cap = torch.cuda.get_device_capability()[0]
+        dtype = torch.bfloat16 if cap >= 8 else torch.float16
+    else:
+        dtype = torch.float32
 
     with torch.no_grad():
         with torch.cuda.amp.autocast(dtype=dtype):
