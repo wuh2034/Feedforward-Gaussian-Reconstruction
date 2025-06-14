@@ -18,7 +18,17 @@ from torch.utils.checkpoint import checkpoint
 from torch.nn.init import trunc_normal_
 from . import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedTensorBlock as Block
 
+'''
+vision_transformer.py 提供了整体的 ViT 架构，内含上述所有组件。
+patch_embed.py 先将图像切成 token（patch），送入后续层。
+每个 Block（block.py） 中集成了 attention.py、mlp.py／swiglu_ffn.py、drop_path.py、layer_scale.py 和 rope.py 共同完成一次层级的自注意力与前馈运算。
+rope.py 提供的位置编码直接作用在多头注意力中，使网络感知空间信息。
+swiglu_ffn.py 则是 FFN 模块的高效替代，进一步提升性能。
+'''
+
+
 logger = logging.getLogger("dinov2")
+
 
 
 def named_apply(fn: Callable, module: nn.Module, name="", depth_first=True, include_root=False) -> nn.Module:

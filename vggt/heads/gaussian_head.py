@@ -19,7 +19,6 @@ import torch.nn.functional as F
 from .head_act import activate_head
 from .utils import create_uv_grid, position_grid_to_embed
 
-
 class Gaussianhead(nn.Module):
     """
     DPT  Head for dense prediction tasks.
