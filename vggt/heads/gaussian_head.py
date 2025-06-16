@@ -15,6 +15,7 @@ from einops import rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from .head_act import activate_head
 from .utils import create_uv_grid, position_grid_to_embed
@@ -127,6 +128,16 @@ class Gaussianhead(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Conv2d(head_features_2, output_dim, kernel_size=1, stride=1, padding=0),
             )
+
+        with torch.no_grad():
+        # 最后 conv2 输出通道顺序 = [offset(3) | scale(3) | rot(4) | sh | opacity(1)]
+            self.scratch.output_conv2[-1].bias[..., -1]   = 2.0          # σ⁻¹(0.88) ≈ α0.88
+            self.scratch.output_conv2[-1].bias[..., -4:-1] = math.log(0.03)  # σ ≈0.03
+                # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
+        color_start = 3 + 3 + 4                # offset(3)+scale(3)+rot(4)
+        color_end   = color_start + 3          # 只针对 sh_degree=0 的 3 通道
+        nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
+
 
     def forward(
         self,
@@ -273,12 +284,14 @@ class Gaussianhead(nn.Module):
         rotations = reg_dense_rotation(rotations)
         sh = reg_dense_sh(sh)
         opacities = reg_dense_opacities(opacities)
+        colors = sh[..., 0] * 0.2820948
 
         res = {
             'scales': scales,
             'rotations': rotations,
             'sh': sh,
-            'opacities': opacities
+            'opacities': opacities,
+            'colors': colors
         }
         if use_offsets:
             res['means'] = point_map.detach() + offset
@@ -392,13 +405,15 @@ def reg_dense_offsets(xyz, shift=6.0):
     return offsets
 
 # @MODIFIED
-def reg_dense_scales(scales):
-    """
-    Apply an activation function to the offsets so that they are small at initialization
-    """
-    scales = scales.exp()
-    return scales
-
+# def reg_dense_scales(scales):
+#     """
+#     Apply an activation function to the offsets so that they are small at initialization
+#     """
+#     scales = scales.exp()
+#     return scales
+def reg_dense_scales(scales, beta=10.0, min_sigma=0.01, max_sigma=0.1):
+    scales = F.softplus(scales, beta=beta)
+    return torch.clamp(scales, min_sigma, max_sigma)   # ← 非原地
 # @MODIFIED
 def reg_dense_rotation(rotations, eps=1e-8):
     """
@@ -416,10 +431,7 @@ def reg_dense_sh(sh):
 
 # @MODIFIED
 def reg_dense_opacities(opacities):
-    """
-    Apply PixelSplat's opacity postprocessing
-    """
-    return opacities.sigmoid()
+    return torch.clamp(opacities.sigmoid(), 1e-3, 0.98)  # ← 非原地
 
 
 class ResidualConvUnit(nn.Module):

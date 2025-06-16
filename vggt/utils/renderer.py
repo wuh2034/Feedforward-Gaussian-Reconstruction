@@ -1,46 +1,78 @@
-# vggt/utils/renderer.py  ────────────────────────────────────────────────────
-import torch, gsplat
+# vggt/utils/renderer.py
+import torch
+import gsplat
 
-@torch.amp.autocast("cuda", enabled=False)
-def render_gaussians(gdict, Ks, viewmats, H: int, W: int,
-                     bg: str | None = "white", tile: int = 16):
 
-    B, N, _ = gdict["means"].shape
+@torch.amp.autocast("cuda", enabled=False)   # 渲染阶段保持 fp32
+def render_gaussians(
+    gdict: dict,              # keys = means / scales / rotations / opacities
+    Ks: torch.Tensor,         # (B,3,3)  or (B,1,3,3)  or (B,4)
+    viewmats: torch.Tensor,   # (B,4,4)  or (B,1,3,4) / (B,3,4)
+    H: int,
+    W: int,
+    bg: str | None = "white",
+    tile: int = 16,
+) -> torch.Tensor:
+    """
+    Returns: (B, 3, H, W)  —  RGB in [0,1]
+    """
 
-    # ---------- 0.  修补 viewmats 形状 (B,3,4) → (B,4,4) -------------------
-    if viewmats.ndim == 3 and viewmats.shape[1:] == (3, 4):
-        pad = torch.tensor([0, 0, 0, 1], dtype=viewmats.dtype,
-                           device=viewmats.device).view(1, 1, 4).expand(B, -1, -1)
-        viewmats = torch.cat([viewmats, pad], dim=1)        # (B,4,4)  <<< NEW
+    B, N, _ = gdict["means"].shape  # (B,N,3)
 
-    # ---------- 1. 统一 Ks → (B,3,3)（与之前代码一致） ---------------------
-    if Ks.ndim == 4:                           # (B,1,3,3)
-        Ks = Ks.squeeze(1)
-    elif Ks.ndim == 2 and Ks.shape[1] == 4:    # (B,4) = fx,fy,cx,cy
+    # ------------------------------------------------------------------
+    # 0. 处理 viewmats 形状与 dtype  → (B,1,4,4) float32
+    # ------------------------------------------------------------------
+    if viewmats.ndim == 4 and viewmats.shape[1] == 1:  # (B,1,3,4)
+        viewmats = viewmats.squeeze(1)                 # (B,3,4)
+
+    if viewmats.ndim == 3 and viewmats.shape[1:] == (3, 4):  # (B,3,4)
+        pad_row = torch.tensor([0, 0, 0, 1],
+                               device=viewmats.device,
+                               dtype=torch.float32).view(1, 1, 4).expand(B, -1, -1)
+        viewmats = torch.cat([viewmats.float(), pad_row], dim=1)  # (B,4,4)
+
+    if viewmats.ndim == 3:  # (B,4,4)
+        viewmats = viewmats.unsqueeze(1)               # (B,1,4,4)
+    viewmats = viewmats.float()                        # 确保 fp32
+
+    # ------------------------------------------------------------------
+    # 1. 处理 Ks 形状与 dtype         → (B,1,3,3) float32
+    # ------------------------------------------------------------------
+    if Ks.ndim == 4 and Ks.shape[1] == 1:              # (B,1,3,3)
+        Ks = Ks.float()
+    elif Ks.ndim == 3:                                 # (B,3,3)
+        Ks = Ks.unsqueeze(1).float()
+    elif Ks.ndim == 2 and Ks.shape[1] == 4:            # (B,4)
         fx, fy, cx, cy = Ks.t()
         Ks = torch.stack([
-            torch.stack([fx, torch.zeros_like(fx), cx], dim=-1),
-            torch.stack([torch.zeros_like(fy), fy, cy], dim=-1),
-            torch.tensor([0, 0, 1], device=Ks.device).expand(B, -1)
-        ], dim=1)                              # (B,3,3)
+                torch.stack([fx, torch.zeros_like(fx), cx], dim=-1),
+                torch.stack([torch.zeros_like(fy), fy, cy], dim=-1),
+                torch.tensor([0., 0., 1.], device=Ks.device).expand(B, -1)
+             ], dim=1).unsqueeze(1).float()            # (B,1,3,3)
+    else:
+        raise ValueError(f"Unexpected Ks shape {Ks.shape}")
 
-    # ---------- 2. 常量颜色 & 调用 rasterization ---------------------------
-    colors = torch.ones(B, N, 3, device=Ks.device)
+    # ------------------------------------------------------------------
+    # 2. 准备颜色常量 & 调用 rasterization
+    # ------------------------------------------------------------------
+    colors = torch.ones(B, N, 3, device=Ks.device, dtype=torch.float32)
 
     rgb, _, _ = gsplat.rasterization(
-        means      = gdict["means"],
-        quats      = gdict["rotations"],
-        scales     = gdict["scales"],
-        opacities  = gdict["opacities"].squeeze(-1),
-        colors     = colors,
-        viewmats   = viewmats,                 # 现在一定 (B,4,4)
-        Ks         = Ks,                       # (B,3,3)
+        means      = gdict["means"].float(),
+        quats      = gdict["rotations"].float(),
+        scales     = gdict["scales"].float(),
+        opacities  = gdict["opacities"].squeeze(-1).float(),
+        colors=gdict['colors'].float(),
+        viewmats   = viewmats,   # (B,1,4,4)
+        Ks         = Ks,         # (B,1,3,3)
         width      = W,
         height     = H,
         rasterize_mode = "antialiased",
         tile_size  = tile,
         backgrounds = None if bg is None else
-                      torch.tensor([1,1,1], device=Ks.device),
-    )                                           # (B,H,W,3)
+                      torch.tensor([1.0, 1.0, 1.0],
+                                   device=Ks.device,
+                                   dtype=torch.float32),
+    )  # → (B,1,H,W,3)
 
-    return rgb.permute(0,3,1,2).clamp(0,1)      # → (B,3,H,W)
+    return rgb.squeeze(1).permute(0, 3, 1, 2).clamp(0, 1)  # (B,3,H,W)
