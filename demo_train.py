@@ -12,6 +12,7 @@ from vggt.heads.dpt_head import DPTHead
 from vggt.heads.gaussian_head import Gaussianhead
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
+
 # 1. Dataset
 class ImageDataset(Dataset):
     def __init__(self, img_paths, labels=None, transform=None):
@@ -41,6 +42,8 @@ class ImageDataset(Dataset):
             return img, label
         else:
             return img
+        
+        
 
 def train():
     pass
@@ -54,7 +57,7 @@ if __name__ == "__main__":
     print(f"Device: {device},  Mixed-Precision dtype: {dtype}")
 
     # ───────────────────────────── 2. load image paths ─────────────────────────────
-    raw_dir = "examples/room_2/images"
+    raw_dir = "images"
     image_dir = os.path.expanduser(raw_dir)
     patterns = ["*.jpg", "*.JPG", "*.jpeg", "*.JPEG"]
     image_paths = []
@@ -110,6 +113,7 @@ if __name__ == "__main__":
     gaussian_num_channels = 3 + 3 + 4 + 3 * (sh_degree+1)**2 + 1
     gaussian_head = Gaussianhead(dim_in=2 * model.embed_dim, output_dim=gaussian_num_channels, activation="exp", conf_activation="expp1").to(device)
     print(f"✔ Model ready   ({time.time()-t0:.1f}s)")
+    # print(gaussian_head.parameters.shape())
 
     # 3) Optimizer & Loss
     optimizer = torch.optim.Adam(gaussian_head.parameters(), lr=1e-3)
@@ -117,6 +121,7 @@ if __name__ == "__main__":
 
     # ───────────────────────────── 4. tensorboard & tqdm ─────────────────────────────
     writer = SummaryWriter("runs/gaussian_head_only")
+
 
     # ───────────────────────────── 5. train ─────────────────────────────
     num_epochs = 5
@@ -144,6 +149,7 @@ if __name__ == "__main__":
                     pose_enc = model.camera_head(aggregated_tokens_list)[-1]
                     # Extrinsic and intrinsic matrices, following OpenCV convention (camera from world)
                     extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, imgs.shape[-2:])
+
 
             # 2) Forward & backward on Gaussian head only
             gaussian_map = gaussian_head(aggregated_tokens_list, imgs, ps_idx, point_map)
