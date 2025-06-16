@@ -12,6 +12,8 @@ from vggt.heads.dpt_head import DPTHead
 from vggt.heads.gaussian_head import Gaussianhead
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 
+from torchvision.utils import save_image                                  #:contentReference[oaicite:4]{index=4}
+from vggt.utils.renderer import render_gaussians
 
 # 1. Dataset
 class ImageDataset(Dataset):
@@ -32,7 +34,7 @@ class ImageDataset(Dataset):
         
         # ───────────────────────────── 1. Transform ─────────────────────────────
         if self.transform==load_and_preprocess_images:
-            img = self.transform([self.img_paths[idx]])
+            img = self.transform([self.paths[idx]])[0]      # (1,3,H,W)
         elif self.transform:
             img = self.transform(img)
 
@@ -78,18 +80,18 @@ if __name__ == "__main__":
     dataset = ImageDataset(image_paths, labels=None, transform=load_and_preprocess_images)
 
     # <<< 调试：打印一下前几张图片的尺寸
-    print("⏳ Loading & preprocessing images ...")
-    t0 = time.time()
-    images = None
-    for img in dataset:
-        if images is not None:
-            images = torch.cat((images, img), 0)
-        else:
-            images=img
-    # images = load_and_preprocess_images(image_paths).to(device)
-    F, _, H, W = images.shape
-    print(f"✔ {F} frames  ({H}×{W})   ({time.time()-t0:.1f}s)")
-    del(images)
+    # print("⏳ Loading & preprocessing images ...")
+    # t0 = time.time()
+    # images = None
+    # for img in dataset:
+    #     if images is not None:
+    #         images = torch.cat((images, img), 0)
+    #     else:
+    #         images=img
+    # # images = load_and_preprocess_images(image_paths).to(device)
+    # F, _, H, W = images.shape
+    # print(f"✔ {F} frames  ({H}×{W})   ({time.time()-t0:.1f}s)")
+    # del(images)
 
     # 2) Dataloader
     dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
@@ -121,8 +123,10 @@ if __name__ == "__main__":
 
     # ───────────────────────────── 4. tensorboard & tqdm ─────────────────────────────
     writer = SummaryWriter("runs/gaussian_head_only")
-
-
+    
+    save_root = "renders"
+    os.makedirs(save_root, exist_ok=True)   
+    global_step = 0
     # ───────────────────────────── 5. train ─────────────────────────────
     num_epochs = 5
     for epoch in range(1, num_epochs+1):
@@ -131,30 +135,70 @@ if __name__ == "__main__":
 
         for imgs in loop:
             imgs = imgs.to(device)
+            B, C, H, W = imgs.shape
 
             # 1) Extract features from pretrained VGGT model (no grads flowing into backbone)
-            with torch.no_grad():
-                with torch.cuda.amp.autocast(dtype=dtype):
-                    # Predict attributes including cameras, depth maps, and point maps.
-                    # If without batch dimension, add it
-                    if len(imgs.shape) == 4:
-                        imgs = imgs.unsqueeze(0)
-                    # Predict tokens
-                    aggregated_tokens_list, ps_idx = model.aggregator(imgs)
-                    # Predict Depth Maps
-                    depth_map, depth_conf = model.depth_head(aggregated_tokens_list, imgs, ps_idx)
-                    # Predict Point Maps
-                    point_map, point_conf = model.point_head(aggregated_tokens_list, imgs, ps_idx)
-                    # Predict Cameras
-                    pose_enc = model.camera_head(aggregated_tokens_list)[-1]
-                    # Extrinsic and intrinsic matrices, following OpenCV convention (camera from world)
-                    extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, imgs.shape[-2:])
+            with torch.no_grad(), torch.cuda.amp.autocast(dtype=dtype):
+                # Predict attributes including cameras, depth maps, and point maps.
+                # If without batch dimension, add it
+               
+                # if len(imgs.shape) == 4:
+                #     imgs = imgs.unsqueeze(0)
+               
+                # Predict tokens
+                aggregated_tokens_list, ps_idx = model.aggregator(imgs)
+                # Predict Depth Maps
+                depth_map, depth_conf = model.depth_head(aggregated_tokens_list, imgs, ps_idx)
+                # Predict Point Maps
+                point_map, point_conf = model.point_head(aggregated_tokens_list, imgs, ps_idx)
+                # Predict Cameras
+                pose_enc = model.camera_head(aggregated_tokens_list)[-1]
+                # Extrinsic and intrinsic matrices, following OpenCV convention (camera from world)
+                extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, imgs.shape[-2:])
 
 
             # 2) Forward & backward on Gaussian head only
-            gaussian_map = gaussian_head(aggregated_tokens_list, imgs, ps_idx, point_map)
-            print(gaussian_map.keys())
+            # gaussian_map = gaussian_head(aggregated_tokens_list, imgs, ps_idx, point_map)
+            # print(gaussian_map.keys())
+            gdict = gaussian_head(
+            aggregated_tokens_list,                         # 改名
+            imgs.unsqueeze(1),                              # -> (B,1,3,H,W)
+            ps_idx,
+            point_map.unsqueeze(1)                          # -> (B,1,1,H,W,3)
+            )
+            # 返回字段各自为 (B,S,H,W,*) —— reshape 成 (B,N,*)
+            for k in gdict:
+                gdict[k] = gdict[k].reshape(B, -1, gdict[k].shape[-1])
 
+            # ─── 3. 可微渲染 ─────────────────────────────────────────────────────────
+            renders = render_gaussians(gdict, intrinsic, extrinsic, H, W)   # (B,3,H,W)
+
+            # ─── 4. 损失函数 ─────────────────────────────────────────────────────────
+            with torch.cuda.amp.autocast(dtype=dtype):
+                loss_rgb = criterion(renders, imgs)               # L2
+                loss_reg = (gdict['scales']*0.0).mean()           # 例：正则约束（可选）
+                loss = loss_rgb + 1e-4*loss_reg
+
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+            # ─── 5. 记录 & 可视化 ───────────────────────────────────────────────────
+            epoch_loss += loss.item()
+            loop.set_postfix(loss=loss.item())
+            writer.add_scalar("Loss/train_batch", loss.item(), global_step)
+
+            # 每 n step 导出一张渲染图
+            if global_step % 50 == 0:
+                grid = torch.cat([imgs, renders], dim=0)          # GT | 渲染
+                save_image(grid, f"{save_root}/ep{epoch:02d}_it{global_step:06d}.png",
+                        normalize=True, value_range=(0,1))     #:contentReference[oaicite:5]{index=5}
+            global_step += 1
+
+            avg = epoch_loss / len(dataloader)
+            writer.add_scalar("Loss/train_epoch", avg, epoch)
+            print(f"Epoch {epoch:02d} • avg loss: {avg:.4f}")
+        writer.close()
 
         #     preds = gaussian_head(feats)          # -> (B, gaussian_num_channels, H, W)
         #     loss  = criterion(preds, targets)
