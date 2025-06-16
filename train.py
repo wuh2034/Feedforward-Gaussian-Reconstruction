@@ -24,7 +24,7 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         img = Image.open(self.paths[idx]).convert("RGB")
         if self.tfm is load_and_preprocess_images:
-            img = self.tfm([self.paths[idx]])[0]             # (3,H,W)   <<< CHANGED
+            img = self.tfm([self.paths[idx]])[0]             # (3,H,W)   
         else:
             img = self.tfm(img)
         return img
@@ -39,7 +39,7 @@ def flatten_gdict(gdict: dict, B: int):
     out = {}
     for k, v in gdict.items():                   # v.shape = (B, ..., C)
         C = v.shape[-1] if v.ndim >= 2 else 1
-        out[k] = v.reshape(B, -1, C)             # (B,N,C)               <<< CHANGED
+        out[k] = v.reshape(B, -1, C)             # (B,N,C)             
     return out
 # -----------------------------------------------------------------------------
 
@@ -66,22 +66,22 @@ g_head     = Gaussianhead(2*vggt.embed_dim, output_dim=out_dim,
                           activation="exp", conf_activation="expp1",
                           sh_degree=sh_degree).to(device)
 
-opt  = torch.optim.Adam(g_head.parameters(), lr=1e-3)
+opt  = torch.optim.Adam(g_head.parameters(), lr=1e-4)
 crit = nn.MSELoss()
 
 writer = SummaryWriter("runs/gauss_train")
 os.makedirs("renders", exist_ok=True)
 
 global_step = 0
-for epoch in range(1, 6):
+for epoch in range(1, 100):
     loop, epoch_loss = tqdm(dataloader, f"Epoch {epoch}/5"), 0.0
     for imgs in loop:
         imgs = imgs.to(device)                          # (B,3,H,W)
         B,C,H,W = imgs.shape
-        imgs_in = imgs.unsqueeze(1)                     # (B,1,3,H,W)      <<< CHANGED
+        imgs_in = imgs.unsqueeze(1)                     # (B,1,3,H,W)      
 
         # ----- VGGT 前向 (冻结) -----------------------------------------------
-        with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):       # <<< CHANGED
+        with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):       
             tok_list, ps_idx = vggt.aggregator(imgs_in)
             depth_map, _   = vggt.depth_head(tok_list, imgs_in, ps_idx)
             point_map, _   = vggt.point_head(tok_list, imgs_in, ps_idx)
@@ -89,8 +89,10 @@ for epoch in range(1, 6):
             extr, intr     = pose_encoding_to_extri_intri(pose_enc, (H, W))
 
         # ----- Gaussian Head -------------------------------------------------
-        gdict_raw = g_head(tok_list, imgs_in, ps_idx, point_map)             # <<< CHANGED
-        gdict = flatten_gdict(gdict_raw, B)                                  # <<< CHANGED
+        gdict_raw = g_head(tok_list, imgs_in, ps_idx, point_map)             
+        gdict = flatten_gdict(gdict_raw, B)                                  
+        print("α:", gdict["opacities"].mean().item(),
+        "σ:", gdict["scales"].mean().item())
 
         # ----- 可微渲染 -------------------------------------------------------
         renders = render_gaussians(gdict, intr, extr, H, W)                  # (B,3,H,W)
@@ -108,7 +110,7 @@ for epoch in range(1, 6):
         loop.set_postfix(loss=loss.item())
         writer.add_scalar("loss/batch", loss.item(), global_step)
 
-        if global_step % 50 == 0:
+        if global_step % 5 == 0:
             save_image(torch.cat([imgs, renders], 0),
                        f"renders/ep{epoch:02d}_it{global_step:06d}.png",
                        normalize=True, value_range=(0,1))
