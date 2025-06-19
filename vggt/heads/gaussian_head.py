@@ -20,7 +20,7 @@ import math
 from .head_act import activate_head
 from .utils import create_uv_grid, position_grid_to_embed
 
-class Gaussianhead(nn.Module):
+class Gaussianhead(nn.Module):#继承父类
     """
     DPT  Head for dense prediction tasks.
 
@@ -42,22 +42,28 @@ class Gaussianhead(nn.Module):
         down_ratio (int, optional): Downscaling factor for the output resolution. Default is 1.
     """
 
-    def __init__(
+    def __init__(#先让 子类 完成自身初始化
         self,
-        dim_in: int,
+        dim_in: int,# Transformer输出通道数 张量形状(B, 197, 768) 一个batch中B张图片,一个图片分成14x14+1个patch, 一个patch 16x16x3
+        #Transformer 输出 token 张量的形状是 (B, N, dim_in)
         patch_size: int = 14,
-        output_dim: int = 4,
+        output_dim: int = 4, # number of output channels
         activation: str = "inv_log",
         conf_activation: str = "expp1",
-        features: int = 256,
-        out_channels: List[int] = [256, 512, 1024, 1024],
-        intermediate_layer_idx: List[int] = [4, 11, 17, 23],
-        pos_embed: bool = True,
-        feature_only: bool = False,
-        down_ratio: int = 1,
+        features: int = 256,#选取的中间层token经过处理后有不同的C, 还需要把他们统一到相同的C才能拼接,这里选取的C=256
+        out_channels: List[int] = [256, 512, 1024, 1024],#这里的意思是指从tranformer的不同层中取出中间的token,然后用1x1 conv得到不同channel的特征图
+        #比如从4, 11, 17, 23层分别取出形状(B,N,D)的token后,用conv 1x1分别映射成(BxCxHxW)的空间特征图
+        #低层映射的C小,侧重捕捉局部纹理、边缘等低级视觉特征,中层（如第 8 层）开始体现小范围图案与形状；深层（如第12层）则包含全局语义和高阶抽象信息
+        intermediate_layer_idx: List[int] = [4, 11, 17, 23],#选取不同层的tranformer
+        pos_embed: bool = True,#是否在self.projection空间特征图上加入positional encoding
+        feature_only: bool = False,#是否只输出融合后的空间特征图，不再进行高斯参数的回归预测。
+        #当你只想把 Gaussianhead 当作一个多尺度特征融合模块（而非最终的高斯参数头）来使用时，可将 feature_only=True。
+        # 这时，网络会在融合骨架（fusion）之后直接使用 output_conv1（一个 3×3 卷积）输出通道数为 features 的特征图，并不执行后续的 output_conv2、gaussian_postprocess 等高斯参数计算逻辑。
+        down_ratio: int = 1,#如果 down_ratio=1，融合后的特征图会被插值回与原始图像相同的分辨率。例如 down_ratio=2 时，输出分辨率是输入宽高的一半。
         sh_degree: int = 0
     ) -> None:
-        super(Gaussianhead, self).__init__()
+        super(Gaussianhead, self).__init__()#super(ChildClass, instance),调用父类构造函数（__init__）
+        #接着再做子类自己的初始化
         self.patch_size = patch_size
         self.activation = activation
         self.conf_activation = conf_activation
@@ -67,10 +73,14 @@ class Gaussianhead(nn.Module):
         self.intermediate_layer_idx = intermediate_layer_idx
         self.sh_degree = sh_degree
 
-        self.norm = nn.LayerNorm(dim_in)
+        self.norm = nn.LayerNorm(dim_in)#对输入的token做layernorm, 在(B,S,D)中的D上做归一化
+        #nn.LayerNorm 是一个类（class），位于 torch.nn 模块下。D表示对某个通道做归一化
 
-        # Projection layers for each output channel from tokens.
-        self.projects = nn.ModuleList(
+
+        # Projection layers for each output channel from tokens. 1x1 conv
+        #这里处理的是transformer中间层的patch token(B, S, D), dim_in = D, 经过重塑后变为(B, D, Hi, Wi)作为输入
+        #输出: (B, oc, Hi, Wi)对于不同中间层的patch token, 提取不同的C表达不同层级的特征
+        self.projects = nn.ModuleList(# nn.ModuleList是一个容器, 里面可以有不同的子模块nn.Conv2d, nn.Idnetity, nn.ConvTranspose2d,还可以用for loop迭代使用
             [
                 nn.Conv2d(
                     in_channels=dim_in,
@@ -84,22 +94,22 @@ class Gaussianhead(nn.Module):
         )
 
         # Resize layers for upsampling feature maps.
-        self.resize_layers = nn.ModuleList(
+        self.resize_layers = nn.ModuleList(#把Projection后的token size变为统一的 H x W,提供了四种方法统一分辨率
             [
-                nn.ConvTranspose2d(
+                nn.ConvTranspose2d(#上采样
                     in_channels=out_channels[0], out_channels=out_channels[0], kernel_size=4, stride=4, padding=0
-                ),
+                ),# x4上采样
                 nn.ConvTranspose2d(
                     in_channels=out_channels[1], out_channels=out_channels[1], kernel_size=2, stride=2, padding=0
-                ),
-                nn.Identity(),
+                ), # x2上采样
+                nn.Identity(),#保持分辨率
                 nn.Conv2d(
                     in_channels=out_channels[3], out_channels=out_channels[3], kernel_size=3, stride=2, padding=1
-                ),
+                ), # 1/2下采样
             ]
         )
 
-        self.scratch = _make_scratch(
+        self.scratch = _make_scratch(#调用_make_scratch方法, 对齐所有空间特征图的C = features
             out_channels,
             features,
             expand=False,
@@ -139,14 +149,14 @@ class Gaussianhead(nn.Module):
         nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
 
 
-    def forward(
+    def forward(#切分→调度→拼接
         self,
-        aggregated_tokens_list: List[torch.Tensor],
-        images: torch.Tensor,
-        patch_start_idx: int,
-        point_map: torch.Tensor,
-        frames_chunk_size: int = 8,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        aggregated_tokens_list: List[torch.Tensor],#从 Transformer 各中间层抽出的 token 序列，元素形状均为 (B, S, D)
+        images: torch.Tensor,#输入图像序列，B 批次大小，S 帧数，H×W 空间分辨率(B是一次输入的样本多少, S是一个样本有多少帧, HxW是一帧的分辨率)
+        patch_start_idx: int,#patch_start_idx 标记 patch token 在序列中的起始下标
+        point_map: torch.Tensor,# 用于后续偏移计算
+        frames_chunk_size: int = 8,#控制分块处理帧数
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:# ->表示函数返回值提示, Union表示返回值可以是 类型 A 或 类型 B
         """
         Forward pass through the DPT head, supports processing by chunking frames.
         Args:
@@ -162,9 +172,11 @@ class Gaussianhead(nn.Module):
                 - If feature_only=True: Feature maps with shape [B, S, C, H, W]
                 - Otherwise: Tuple of (predictions, confidence) both with shape [B, S, 1, H, W]
         """
-        B, S, _, H, W = images.shape
+        B, S, _, H, W = images.shape# C固定为3, 这里不使用,仅占位
 
         # If frames_chunk_size is not specified or greater than S, process all frames at once
+        # S 可能很大,直接送入_forward_impl处理内存占据大, 可以分块进行, 设置一个frames_chunk_size < S
+        # 如果不分块, 或者分块尺寸>S,就一次都送入_forward_impl处理
         if frames_chunk_size is None or frames_chunk_size >= S:
             return self._forward_impl(aggregated_tokens_list, images, point_map, patch_start_idx)
 
@@ -172,19 +184,19 @@ class Gaussianhead(nn.Module):
         assert frames_chunk_size > 0
 
         # Process frames in batches
-        all_preds = []
+        all_preds = [] #定义最后的predictions
         all_conf = []
-
+        #生成chunk的idx, 同时保证frames_end_idx不超过S
         for frames_start_idx in range(0, S, frames_chunk_size):
             frames_end_idx = min(frames_start_idx + frames_chunk_size, S)
 
-            # Process batch of frames
-            if self.feature_only:
+            # Process batch of frames 分块处理
+            if self.feature_only:#只返回特征图 (B, S_chunk, C, H, W)，追加到 all_preds。
                 chunk_output = self._forward_impl(
                     aggregated_tokens_list, images, point_map, patch_start_idx, frames_start_idx, frames_end_idx
                 )
                 all_preds.append(chunk_output)
-            else:
+            else:#返回高斯参数和置信度
                 chunk_preds, chunk_conf = self._forward_impl(
                     aggregated_tokens_list, images, point_map, patch_start_idx, frames_start_idx, frames_end_idx
                 )
@@ -193,11 +205,13 @@ class Gaussianhead(nn.Module):
 
         # Concatenate results along the sequence dimension
         if self.feature_only:
-            return torch.cat(all_preds, dim=1)
+            return torch.cat(all_preds, dim=1)# 在S上拼接所有chunk
         else:
             return torch.cat(all_preds, dim=1), torch.cat(all_conf, dim=1)
 
-    def _forward_impl(
+    def _forward_impl(#实际的特征生成与高斯参数回归
+    #整条流水线从最初的输入 (B,196,768) patch token序列，
+    #到最终的输出 (B·196, C_out, 16,16) 融合特征图，完成了序列→空间→多尺度融合→平滑的全部操作。
         self,
         aggregated_tokens_list: List[torch.Tensor],
         images: torch.Tensor,
@@ -238,23 +252,24 @@ class Gaussianhead(nn.Module):
             if frames_start_idx is not None and frames_end_idx is not None:
                 x = x[:, frames_start_idx:frames_end_idx]
 
-            x = x.view(B * S, -1, x.shape[-1])
-
+            x = x.view(B * S, -1, x.shape[-1])#这里是把(B, S, D)变成(B*S, D, H, W)的空间特征图然后进行projection
+                                            # S是patch的数量
             x = self.norm(x)
 
             x = x.permute(0, 2, 1).reshape((x.shape[0], x.shape[-1], patch_h, patch_w))
 
-            x = self.projects[dpt_idx](x)
+            x = self.projects[dpt_idx](x) # (B·S, oc_i, h_i, w_i)
             if self.pos_embed:
                 x = self._apply_pos_embed(x, W, H)
-            x = self.resize_layers[dpt_idx](x)
+            x = self.resize_layers[dpt_idx](x) # → (B·S, oc_i, H, W) 同一 H×W
 
-            out.append(x)
+            out.append(x)#这里得到的features是具有不同C的空间特征图(B, oc, H, W)
             dpt_idx += 1
 
         # Fuse features from multiple layers.
         out = self.scratch_forward(out)
         # Interpolate fused output to match target image resolution.
+        #将 DPT 融合后的低分辨率特征图恢复到与原始图像或指定缩放比例相同的大小，便于做后续像素级的回归或可微渲染
         out = custom_interpolate(
             out,
             (int(patch_h * self.patch_size / self.down_ratio), int(patch_w * self.patch_size / self.down_ratio)),
@@ -323,14 +338,18 @@ class Gaussianhead(nn.Module):
             Tensor: Fused feature map.
         """
         layer_1, layer_2, layer_3, layer_4 = features
-
-        layer_1_rn = self.scratch.layer1_rn(layer_1)
-        layer_2_rn = self.scratch.layer2_rn(layer_2)
-        layer_3_rn = self.scratch.layer3_rn(layer_3)
-        layer_4_rn = self.scratch.layer4_rn(layer_4)
-
+        #调用layer1_rn方法,把所有(B, oc_i, H, W)统一映射到同一个C
+        layer_1_rn = self.scratch.layer1_rn(layer_1)# oc_1 → features
+        layer_2_rn = self.scratch.layer2_rn(layer_2)# oc_2 → features
+        layer_3_rn = self.scratch.layer3_rn(layer_3)# oc_3 → features
+        layer_4_rn = self.scratch.layer4_rn(layer_4)# oc_4 → features
+        #传入的layer_4_rn是_make_scratch 时注册到 self.scratch的Conv2d的输出
+        #执行 refinenet4 的融合操作,通过 _make_fusion_block(features, has_residual=False) 创建的 FeatureFusionBlock 实例。
+        #流程: 先对输入做一次卷积平滑（resConfUnit2），然后上采样到与第 3 路特征相同的空间大小——由关键字参数 size=layer_3_rn.shape[2:] 指定。
+        #新生成的张量 out 形状为 (B·S, features, H₃, W₃)这里所有层的token的分辨率之前已经对齐过了,都是 H x W
+        #输入的变量都是(B, Features, H, W)做四层的token融合
         out = self.scratch.refinenet4(layer_4_rn, size=layer_3_rn.shape[2:])
-        del layer_4_rn, layer_4
+        del layer_4_rn, layer_4 #删除变量绑定
 
         out = self.scratch.refinenet3(out, layer_3_rn, size=layer_2_rn.shape[2:])
         del layer_3_rn, layer_3
@@ -341,7 +360,7 @@ class Gaussianhead(nn.Module):
         out = self.scratch.refinenet1(out, layer_1_rn)
         del layer_1_rn, layer_1
 
-        out = self.scratch.output_conv1(out)
+        out = self.scratch.output_conv1(out)#输入(B, features, H, W), 输出(B, Cout, H, W)
         return out
 
 
@@ -365,14 +384,14 @@ def _make_fusion_block(features: int, size: int = None, has_residual: bool = Tru
 
 
 def _make_scratch(in_shape: List[int], out_shape: int, groups: int = 1, expand: bool = False) -> nn.Module:
-    scratch = nn.Module()
+    scratch = nn.Module()#这里把scratch 定义成了一个nn.Module()容器
     out_shape1 = out_shape
     out_shape2 = out_shape
     out_shape3 = out_shape
     if len(in_shape) >= 4:
         out_shape4 = out_shape
 
-    if expand:
+    if expand:#如果做扩展
         out_shape1 = out_shape
         out_shape2 = out_shape * 2
         out_shape3 = out_shape * 4
