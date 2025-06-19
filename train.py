@@ -73,7 +73,7 @@ writer = SummaryWriter("runs/gauss_train")
 os.makedirs("renders", exist_ok=True)
 
 global_step = 0
-for epoch in range(1, 100):
+for epoch in range(1, 50):
     loop, epoch_loss = tqdm(dataloader, f"Epoch {epoch}/5"), 0.0
     for imgs in loop:
         imgs = imgs.to(device)                          # (B,3,H,W)
