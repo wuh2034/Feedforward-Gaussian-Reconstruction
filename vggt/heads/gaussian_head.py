@@ -60,7 +60,8 @@ class Gaussianhead(nn.Module):#继承父类
         #当你只想把 Gaussianhead 当作一个多尺度特征融合模块（而非最终的高斯参数头）来使用时，可将 feature_only=True。
         # 这时，网络会在融合骨架（fusion）之后直接使用 output_conv1（一个 3×3 卷积）输出通道数为 features 的特征图，并不执行后续的 output_conv2、gaussian_postprocess 等高斯参数计算逻辑。
         down_ratio: int = 1,#如果 down_ratio=1，融合后的特征图会被插值回与原始图像相同的分辨率。例如 down_ratio=2 时，输出分辨率是输入宽高的一半。
-        sh_degree: int = 0
+        # sh_degree: int = 0
+        sh_degree: int = 2 #设置sh阶数=2
     ) -> None:
         super(Gaussianhead, self).__init__()#super(ChildClass, instance),调用父类构造函数（__init__）
         #接着再做子类自己的初始化
@@ -146,11 +147,12 @@ class Gaussianhead(nn.Module):#继承父类
             self.scratch.output_conv2[-1].bias[..., -1]   = -4.0   #调小初始化α
             # 将前 3 个 scale 通道 bias 设为 log(0.03)
             self.scratch.output_conv2[-1].bias[..., -4:-1] = math.log(0.03)  # σ ≈0.03
+        if sh_degree == 0:
         # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
-        color_start = 3 + 3 + 4                # offset(3)+scale(3)+rot(4)
-        color_end   = color_start + 3          # 只针对 sh_degree=0 的 3 通道
-        nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
-        # nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end].zero_())
+            color_start = 3 + 3 + 4                # offset(3)+scale(3)+rot(4)
+            color_end   = color_start + 3          # 只针对 sh_degree=0 的 3 通道
+            nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
+            # nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end].zero_())
 
 
     def forward(#切分→调度→拼接

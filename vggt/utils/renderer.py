@@ -58,6 +58,7 @@ def render_gaussians(
     colors = torch.ones(B, N, 3, device=Ks.device, dtype=torch.float32)
 
     rgb, _, _ = gsplat.rasterization(
+        sh_degree        = gdict['sh'].float(),#传入sh阶数
         means      = gdict["means"].float(),
         quats      = gdict["rotations"].float(),
         scales     = gdict["scales"].float(),
