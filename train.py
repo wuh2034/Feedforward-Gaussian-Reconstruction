@@ -56,19 +56,20 @@ dtype  = torch.bfloat16 if (device=="cuda" and torch.cuda.get_device_capability(
 print(f"Device: {device},  Mixed-Precision dtype: {dtype}")
 
 # 1) 读图
-img_dir  = "images"
+img_dir  = "large_images"
 patterns = ["*.jpg","*.JPG","*.jpeg","*.JPEG"]
 paths = sorted(p for pat in patterns for p in glob.glob(os.path.join(img_dir, pat)))
 print("Found", len(paths), "images")
 
 dataset    = ImageDataset(paths, tfm=load_and_preprocess_images) 
-dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=9, shuffle=True)
 
 # 2) 模型
 vggt = VGGT.from_pretrained("facebook/VGGT-1B").eval().to(device)
 for p in vggt.parameters(): p.requires_grad = False
 
-sh_degree  = 0
+# sh_degree  = 0
+sh_degree  = 2 #设置sh阶数=2
 out_dim    = 3+3+4+3*(sh_degree+1)**2+1
 g_head     = Gaussianhead(2*vggt.embed_dim, output_dim=out_dim,
                           activation="exp", conf_activation="expp1",
