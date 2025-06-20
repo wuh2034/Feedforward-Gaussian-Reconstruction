@@ -47,8 +47,8 @@ class Gaussianhead(nn.Module):#继承父类
         dim_in: int,# Transformer输出通道数 张量形状(B, 197, 768) 一个batch中B张图片,一个图片分成14x14+1个patch, 一个patch 16x16x3
         #Transformer 输出 token 张量的形状是 (B, N, dim_in)
         patch_size: int = 14,
-        output_dim: int = 4, # number of output channels
-        activation: str = "inv_log",
+        output_dim: int = 14, # number of output channels, offset 3, scales 3, rotations 4, sh 3*(1+0)**2, opacity 1
+        activation: str = "inv_log", #没有用到
         conf_activation: str = "expp1",
         features: int = 256,#选取的中间层token经过处理后有不同的C, 还需要把他们统一到相同的C才能拼接,这里选取的C=256
         out_channels: List[int] = [256, 512, 1024, 1024],#这里的意思是指从tranformer的不同层中取出中间的token,然后用1x1 conv得到不同channel的特征图
@@ -122,12 +122,12 @@ class Gaussianhead(nn.Module):#继承父类
         self.scratch.refinenet3 = _make_fusion_block(features)
         self.scratch.refinenet4 = _make_fusion_block(features, has_residual=False)
 
-        head_features_1 = features
-        head_features_2 = 32
+        head_features_1 = features #进行最后的conv, 第一层空间特征图的维度
+        head_features_2 = 32 # 降维
 
-        if feature_only:
+        if feature_only:# 只用一个conv 3x3做smoothing, 不降维
             self.scratch.output_conv1 = nn.Conv2d(head_features_1, head_features_1, kernel_size=3, stride=1, padding=1)
-        else:
+        else: #降维到 output_dim
             self.scratch.output_conv1 = nn.Conv2d(
                 head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1
             )
@@ -141,12 +141,16 @@ class Gaussianhead(nn.Module):#继承父类
 
         with torch.no_grad():
         # 最后 conv2 输出通道顺序 = [offset(3) | scale(3) | rot(4) | sh | opacity(1)]
-            self.scratch.output_conv2[-1].bias[..., -1]   = 2.0          # σ⁻¹(0.88) ≈ α0.88
+            # 给最后一个通道σ设为2
+            # self.scratch.output_conv2[-1].bias[..., -1]   = 2.0          # σ⁻¹(0.88) ≈ α0.88, scratch.output_conv2[-1]是nn.Sequantial最后一层的conv结果
+            self.scratch.output_conv2[-1].bias[..., -1]   = -4.0   #调小初始化α
+            # 将前 3 个 scale 通道 bias 设为 log(0.03)
             self.scratch.output_conv2[-1].bias[..., -4:-1] = math.log(0.03)  # σ ≈0.03
-                # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
+        # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
         color_start = 3 + 3 + 4                # offset(3)+scale(3)+rot(4)
         color_end   = color_start + 3          # 只针对 sh_degree=0 的 3 通道
         nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
+        # nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end].zero_())
 
 
     def forward(#切分→调度→拼接
@@ -281,25 +285,34 @@ class Gaussianhead(nn.Module):#继承父类
             out = self._apply_pos_embed(out, W, H)
 
         if self.feature_only:
-            return out.view(B, S, *out.shape[1:])
+            return out.view(B, S, *out.shape[1:])# (B * S, C, H, W) -> (B, S, C, H, W)
+            #(B, S, *out.shape[1:]) 就把原先扁平的第一个维度 (B*S) 拆分回 [B, S]，而后面 *out.shape[1:] 保持其余维度（如通道数和空间分辨率）不变。
 
         out = self.scratch.output_conv2(out)
         out = self.gaussian_postprocess(out, point_map)
-
+        '''
+        返回gaussian parameter dictionary:
+            means(B, H, W, 3)
+            scales(B, H, W, 3)
+            rotations(B, H, W, 4)
+            sh(B, H, W, 3, 1)
+            opacities(B, H, W, 1)
+            colors(B, H, W, 3)
+        '''
         return out
     
     def gaussian_postprocess(self, out: torch.Tensor, point_map: torch.Tensor, use_offsets: bool=True):
         out = out.permute(0, 2, 3, 1) # shape: (B,D,H,W) -> (B,H,W,D)
         point_map = point_map.squeeze(1) # shape: (B,1,H,W,D) -> (B,H,W,D)
         
-        offset, scales, rotations, sh, opacities = torch.split(out, [3, 3, 4, 3*(self.sh_degree+1)**2, 1], dim=-1)
+        offset, scales, rotations, sh, opacities = torch.split(out, [3, 3, 4, 3*(self.sh_degree+1)**2, 1], dim=-1) #按最后一个维度D
         
         offset = reg_dense_offsets(offset)
         scales = reg_dense_scales(scales)
         rotations = reg_dense_rotation(rotations)
         sh = reg_dense_sh(sh)
         opacities = reg_dense_opacities(opacities)
-        colors = sh[..., 0] * 0.2820948
+        colors = sh[..., 0] * 0.2820948 # sh(..., RGB, d_sh), 取出第0维, 并还原成RGB真实值
 
         res = {
             'scales': scales,
@@ -309,7 +322,7 @@ class Gaussianhead(nn.Module):#继承父类
             'colors': colors
         }
         if use_offsets:
-            res['means'] = point_map.detach() + offset
+            res['means'] = point_map.detach() + offset# point_map 原本可能是从前面可微过程（multi‐scale 融合）中求得的张量，默认会继续参与梯度追踪。调用 .detach() 后不再追踪梯度
         else:
             res['means'] = point_map.detach()
 
@@ -391,7 +404,7 @@ def _make_scratch(in_shape: List[int], out_shape: int, groups: int = 1, expand: 
     if len(in_shape) >= 4:
         out_shape4 = out_shape
 
-    if expand:#如果做扩展
+    if expand:#扩展
         out_shape1 = out_shape
         out_shape2 = out_shape * 2
         out_shape3 = out_shape * 4
@@ -418,9 +431,11 @@ def reg_dense_offsets(xyz, shift=6.0):
     """
     Apply an activation function to the offsets so that they are small at initialization
     """
-    d = xyz.norm(dim=-1, keepdim=True)
-    xyz = xyz / d.clip(min=1e-8)
-    offsets = xyz * (torch.exp(d - shift) - torch.exp(torch.zeros_like(d) - shift))
+    #	xyz 的形状 假设为 (..., 3)，最后一维长度为 3，表示每个位置上的三维向量 (x,y,z), .norm计算x,y,z的根号平方和
+    d = xyz.norm(dim=-1, keepdim=True) # 计算平均距离D
+    xyz = xyz / d.clip(min=1e-8) #将 d 中所有小于 1e-8 的元素都替换成 1e-8，而大于等于 1e-8 的元素保持不变。
+    #torch.zeros_like(d)创建和d相同size的全零张量
+    offsets = xyz * (torch.exp(d - shift) - torch.exp(torch.zeros_like(d) - shift)) # d一般很小, exp(d-6)=0.0025, 确保d = 0时输出为0, d > 0时输出很小的offsets
     return offsets
 
 # @MODIFIED
@@ -430,7 +445,7 @@ def reg_dense_offsets(xyz, shift=6.0):
 #     """
 #     scales = scales.exp()
 #     return scales
-def reg_dense_scales(scales, beta=10.0, min_sigma=0.01, max_sigma=0.1):
+def reg_dense_scales(scales, beta=10.0, min_sigma=0.01, max_sigma=0.04):#调小scales上限0.1->0.04
     scales = F.softplus(scales, beta=beta)
     return torch.clamp(scales, min_sigma, max_sigma)   # ← 非原地
 # @MODIFIED
@@ -438,14 +453,14 @@ def reg_dense_rotation(rotations, eps=1e-8):
     """
     Apply PixelSplat's rotation normalization
     """
-    return rotations / (rotations.norm(dim=-1, keepdim=True) + eps)
+    return rotations / (rotations.norm(dim=-1, keepdim=True) + eps)# 做rotation normalization
 
 # @MODIFIED
 def reg_dense_sh(sh):
     """
     Apply PixelSplat's spherical harmonic postprocessing
     """
-    sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3)
+    sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3) #重排sh张量,从(..., RGB * d_sh) -> (..., RGB, d_sh)
     return sh
 
 # @MODIFIED
