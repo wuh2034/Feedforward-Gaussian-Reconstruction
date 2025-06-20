@@ -6,8 +6,8 @@ import gsplat
 @torch.amp.autocast("cuda", enabled=False)   # 渲染阶段保持 fp32
 def render_gaussians(
     gdict: dict,              # keys = means / scales / rotations / opacities
-    Ks: torch.Tensor,         # (B,3,3)  or (B,1,3,3)  or (B,4)
-    viewmats: torch.Tensor,   # (B,4,4)  or (B,1,3,4) / (B,3,4)
+    Ks: torch.Tensor,         # (B,3,3)  or (B,1,3,3)  or (B,4), intr
+    viewmats: torch.Tensor,   # (B,4,4)  or (B,1,3,4) / (B,3,4), extr
     H: int,
     W: int,
     bg: str | None = "white",
