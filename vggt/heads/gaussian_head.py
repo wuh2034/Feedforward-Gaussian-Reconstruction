@@ -438,6 +438,7 @@ def reg_dense_offsets(xyz, shift=6.0):
     xyz = xyz / d.clip(min=1e-8) #将 d 中所有小于 1e-8 的元素都替换成 1e-8，而大于等于 1e-8 的元素保持不变。
     #torch.zeros_like(d)创建和d相同size的全零张量
     offsets = xyz * (torch.exp(d - shift) - torch.exp(torch.zeros_like(d) - shift)) # d一般很小, exp(d-6)=0.0025, 确保d = 0时输出为0, d > 0时输出很小的offsets
+    # offsets = 0.1 * torch.tanh(xyz) #修改offsets定义
     return offsets
 
 # @MODIFIED
@@ -447,7 +448,7 @@ def reg_dense_offsets(xyz, shift=6.0):
 #     """
 #     scales = scales.exp()
 #     return scales
-def reg_dense_scales(scales, beta=10.0, min_sigma=0.01, max_sigma=0.04):#调小scales上限0.1->0.04
+def reg_dense_scales(scales, beta=10.0, min_sigma=0.01, max_sigma=0.04):#调小scales上限0.1->0.04 #调小上下限 下限0.01 -> 0.005, 上线0.04 -> 0.01
     scales = F.softplus(scales, beta=beta)
     return torch.clamp(scales, min_sigma, max_sigma)   # ← 非原地
 # @MODIFIED
