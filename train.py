@@ -68,8 +68,8 @@ dataloader = DataLoader(dataset, batch_size=9, shuffle=True)
 vggt = VGGT.from_pretrained("facebook/VGGT-1B").eval().to(device)
 for p in vggt.parameters(): p.requires_grad = False
 
-# sh_degree  = 0
-sh_degree  = 2 #设置sh阶数=2
+sh_degree  = 0
+# sh_degree  = 2 #设置sh阶数=2
 out_dim    = 3+3+4+3*(sh_degree+1)**2+1
 g_head     = Gaussianhead(2*vggt.embed_dim, output_dim=out_dim,
                           activation="exp", conf_activation="expp1",
@@ -82,7 +82,7 @@ writer = SummaryWriter("runs/gauss_train")
 os.makedirs("renders", exist_ok=True)
 
 global_step = 0
-for epoch in range(1, 100):
+for epoch in range(1, 30000):
     loop, epoch_loss = tqdm(dataloader, f"Epoch {epoch}/5"), 0.0
     for imgs in loop:
         imgs = imgs.to(device)                          # (B,3,H,W)
@@ -119,7 +119,7 @@ for epoch in range(1, 100):
         loop.set_postfix(loss=loss.item())
         writer.add_scalar("loss/batch", loss.item(), global_step)
 
-        if global_step % 5 == 0:
+        if global_step % 100 == 0:
             save_image(torch.cat([imgs, renders], 0),
                        f"renders/ep{epoch:02d}_it{global_step:06d}.png",
                        normalize=True, value_range=(0,1))
