@@ -78,11 +78,17 @@ g_head     = Gaussianhead(2*vggt.embed_dim, output_dim=out_dim,
 opt  = torch.optim.Adam(g_head.parameters(), lr=1e-4)#优化的是g_head.parameter()
 crit = nn.MSELoss()
 
-writer = SummaryWriter("runs/gauss_train")
-os.makedirs("renders", exist_ok=True)
+# writer = SummaryWriter("runs/gauss_train")
+# os.makedirs("renders", exist_ok=True)
+
+# Create a unique run-specific folder using timestamp
+run_id = time.strftime("%Y%m%d-%H%M%S")
+render_dir = os.path.join("renders", run_id)
+writer = SummaryWriter(f"runs/gauss_train_{run_id}")
+os.makedirs(render_dir, exist_ok=True)
 
 global_step = 0
-for epoch in range(1, 30000):
+for epoch in range(1, 10000):
     loop, epoch_loss = tqdm(dataloader, f"Epoch {epoch}/5"), 0.0
     for imgs in loop:
         imgs = imgs.to(device)                          # (B,3,H,W)
@@ -119,10 +125,12 @@ for epoch in range(1, 30000):
         loop.set_postfix(loss=loss.item())
         writer.add_scalar("loss/batch", loss.item(), global_step)
 
-        if global_step % 100 == 0:
-            save_image(torch.cat([imgs, renders], 0),
-                       f"renders/ep{epoch:02d}_it{global_step:06d}.png",
-                       normalize=True, value_range=(0,1))
+        if global_step % 500 == 0:
+            save_image(
+                torch.cat([imgs, renders], 0),
+                os.path.join(render_dir, f"ep{epoch:02d}_it{global_step:06d}.png"),
+                normalize=True, value_range=(0,1)
+            )
         global_step += 1
 
     writer.add_scalar("loss/epoch", epoch_loss/len(dataloader), epoch)
