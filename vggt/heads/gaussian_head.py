@@ -147,12 +147,17 @@ class Gaussianhead(nn.Module):#继承父类
             self.scratch.output_conv2[-1].bias[..., -1]   = -4.0   #调小初始化α
             # 将前 3 个 scale 通道 bias 设为 log(0.03)
             self.scratch.output_conv2[-1].bias[..., -4:-1] = math.log(0.03)  # σ ≈0.03
-        if sh_degree == 0:
-        # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
-            color_start = 3 + 3 + 4                # offset(3)+scale(3)+rot(4)
-            color_end   = color_start + 3          # 只针对 sh_degree=0 的 3 通道
-            nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
-            # nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end].zero_())
+            color_dim   = 3 * (self.sh_degree + 1) ** 2
+            color_start = 3 + 3 + 4
+            color_end   = color_start + color_dim
+            nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end],-2.0, 2.0)
+        
+        # if sh_degree == 0:
+        # # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
+        #     color_start = 3 + 3 + 4                # offset(3)+scale(3)+rot(4)
+        #     color_end   = color_start + 3          # 只针对 sh_degree=0 的 3 通道
+        #     nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end], -2.0, 2.0)
+        #     # nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end].zero_())
 
 
     def forward(#切分→调度→拼接
@@ -448,7 +453,7 @@ def reg_dense_offsets(xyz, shift=6.0):
 #     """
 #     scales = scales.exp()
 #     return scales
-def reg_dense_scales(scales, beta=10.0, min_sigma=0.005, max_sigma=0.01):#调小scales上限0.1->0.04 #调小上下限 下限0.01 -> 0.005, 上线0.04 -> 0.01
+def reg_dense_scales(scales, beta=10.0, min_sigma=0.001, max_sigma=0.005):#调小scales上限0.1->0.04 #调小上下限 下限0.01 -> 0.005, 上线0.04 -> 0.01
     scales = F.softplus(scales, beta=beta)
     return torch.clamp(scales, min_sigma, max_sigma)   # ← 非原地
 # @MODIFIED
