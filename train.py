@@ -88,8 +88,8 @@ writer = SummaryWriter(f"runs/gauss_train_{run_id}")
 os.makedirs(render_dir, exist_ok=True)
 
 global_step = 0
-for epoch in range(1, 10000):
-    loop, epoch_loss = tqdm(dataloader, f"Epoch {epoch}/5"), 0.0
+for epoch in range(1, 30000):
+    loop, epoch_loss = tqdm(dataloader, f"Epoch {epoch}/30000"), 0.0
     for imgs in loop:
         imgs = imgs.to(device)                          # (B,3,H,W)
         B,C,H,W = imgs.shape
@@ -125,7 +125,7 @@ for epoch in range(1, 10000):
         loop.set_postfix(loss=loss.item())
         writer.add_scalar("loss/batch", loss.item(), global_step)
 
-        if global_step % 500 == 0:
+        if global_step % 1000 == 0:
             save_image(
                 torch.cat([imgs, renders], 0),
                 os.path.join(render_dir, f"ep{epoch:02d}_it{global_step:06d}.png"),
