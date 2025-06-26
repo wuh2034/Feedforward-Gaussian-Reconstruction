@@ -33,24 +33,24 @@ def render_gaussians(
                                dtype=torch.float32).view(1, 1, 4).expand(B, -1, -1)
         viewmats = torch.cat([viewmats.float(), pad_row], dim=1)  # (B,4,4)
 
-    if viewmats.ndim == 3:  # (B,4,4)
-        viewmats = viewmats.unsqueeze(1)               # (B,1,4,4)
+    # if viewmats.ndim == 3:  # (B,4,4)
+    #     viewmats = viewmats.unsqueeze(1)               # (B,1,4,4)
     viewmats = viewmats.float()                        # 确保 fp32
 
     # ------------------------------------------------------------------
     # 1. 处理 Ks 形状与 dtype         → (B,1,3,3) float32
     # ------------------------------------------------------------------
     if Ks.ndim == 4 and Ks.shape[1] == 1:              # (B,1,3,3)
-        Ks = Ks.float()
+        Ks = Ks.squeeze(1).float()
     elif Ks.ndim == 3:                                 # (B,3,3)
-        Ks = Ks.unsqueeze(1).float()
+        Ks = Ks.float()
     elif Ks.ndim == 2 and Ks.shape[1] == 4:            # (B,4)
         fx, fy, cx, cy = Ks.t()
         Ks = torch.stack([
                 torch.stack([fx, torch.zeros_like(fx), cx], dim=-1),
                 torch.stack([torch.zeros_like(fy), fy, cy], dim=-1),
                 torch.tensor([0., 0., 1.], device=Ks.device).expand(B, -1)
-             ], dim=1).unsqueeze(1).float()            # (B,1,3,3)
+             ], dim=1).float()            # (B,1,3,3)
     else:
         raise ValueError(f"Unexpected Ks shape {Ks.shape}")
 
@@ -67,10 +67,10 @@ def render_gaussians(
     #         # out[k] = v.reshape(-1, C) #展开成(N, C)
     #     return out
     
-    # for k, v in gdict.items():
-    #     # 0 表示第一个维度，1 表示第二个维度
-    #     gdict[k] = v.flatten(0, 1)  
-    #     # 把第 0 到第 1 维都扁平化了，等价于 reshape(-1, *v.shape[2:])
+    for k, v in gdict.items():
+        # 0 表示第一个维度，1 表示第二个维度
+        gdict[k] = v.flatten(0, 1)  
+        # 把第 0 到第 1 维都扁平化了，等价于 reshape(-1, *v.shape[2:])
     
     
     
@@ -94,4 +94,4 @@ def render_gaussians(
                                    dtype=torch.float32),
     )  # → (B,1,H,W,3)
 
-    return rgb.squeeze(1).permute(0, 3, 1, 2).clamp(0, 1)  # (B,3,H,W)
+    return rgb.permute(0, 3, 1, 2).clamp(0, 1)  # (B,3,H,W)
