@@ -60,8 +60,8 @@ class Gaussianhead(nn.Module):#继承父类
         #当你只想把 Gaussianhead 当作一个多尺度特征融合模块（而非最终的高斯参数头）来使用时，可将 feature_only=True。
         # 这时，网络会在融合骨架（fusion）之后直接使用 output_conv1（一个 3×3 卷积）输出通道数为 features 的特征图，并不执行后续的 output_conv2、gaussian_postprocess 等高斯参数计算逻辑。
         down_ratio: int = 1,#如果 down_ratio=1，融合后的特征图会被插值回与原始图像相同的分辨率。例如 down_ratio=2 时，输出分辨率是输入宽高的一半。
-        # sh_degree: int = 0
-        sh_degree: int = 2 #设置sh阶数=2
+        sh_degree: int = 0
+        # sh_degree: int = 2 #设置sh阶数=2
     ) -> None:
         super(Gaussianhead, self).__init__()#super(ChildClass, instance),调用父类构造函数（__init__）
         #接着再做子类自己的初始化
@@ -317,7 +317,8 @@ class Gaussianhead(nn.Module):#继承父类
         offset = reg_dense_offsets(offset)
         scales = reg_dense_scales(scales)
         rotations = reg_dense_rotation(rotations)
-        sh = reg_dense_sh(sh)
+        
+        # sh = reg_dense_sh(sh)
         opacities = reg_dense_opacities(opacities)
         colors = sh[..., 0] * 0.2820948 # sh(..., RGB, d_sh), 取出第0维, 并还原成RGB真实值
 
@@ -463,13 +464,15 @@ def reg_dense_rotation(rotations, eps=1e-8):
     """
     return rotations / (rotations.norm(dim=-1, keepdim=True) + eps)# 做rotation normalization
 
-# @MODIFIED
-def reg_dense_sh(sh):
-    """
-    Apply PixelSplat's spherical harmonic postprocessing
-    """
-    sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3) #重排sh张量,从(..., RGB * d_sh) -> (..., RGB, d_sh)
-    return sh
+# # @MODIFIED
+# def reg_dense_sh(sh):
+#     """
+#     Apply PixelSplat's spherical harmonic postprocessing
+#     """
+#     # sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3) #重排sh张量,从(..., RGB * d_sh) -> (..., RGB, d_sh)
+#     sh = rearrange(sh, '... (xyz d_sh) -> ... d_sh xyz', xyz=3)#重排成(..., d_sh, RGB)
+    
+#     return sh
 
 # @MODIFIED
 def reg_dense_opacities(opacities):
