@@ -217,7 +217,7 @@ for epoch in range(1, 30000):
         writer.add_scalar("lpips/batch", lpips_loss.item(), global_step)
         writer.add_scalar("ssim/batch", ssim_loss.item(), global_step)
 
-        if global_step % 100 == 0:
+        if global_step % 500 == 0:
             output_path = os.path.join(
                         img_log_path,
                         f"ep{epoch:02d}_it{global_step:06d}.png"
