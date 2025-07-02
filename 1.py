@@ -111,9 +111,10 @@ lpips_fn  = lpips.LPIPS(net='alex').to(device)
 ssim_fn   = SSIM(data_range=1.0).to(device)
 lpips_w, ssim_w = 0.2, 0.2
 
-run_id    = time.strftime("%Y%m%d-%H%M%S")
-render_dir= os.path.join("renders", run_id)
-writer    = SummaryWriter(f"runs/gauss_train_{run_id}")
+run_id = time.strftime("%Y%m%d-%H%M%S")
+out_dir = "/home/stud/syua/storage/user/vggt-guassian"
+render_dir = os.path.join(out_dir, "renders", run_id)
+writer = SummaryWriter(os.path.join(out_dir, f"runs/gauss_train_{run_id}"))
 os.makedirs(render_dir, exist_ok=True)
 
 global_step = 0
@@ -158,6 +159,23 @@ for epoch in range(1, 30000):
                 os.path.join(render_dir, f"ep{epoch:02d}_it{global_step:06d}.png"),
                 normalize=True, value_range=(0,1)
             )
+
+            ### Log params
+            gt_colors_mean = imgs.mean(dim=[2, 3])                 # (B, 3)
+            pred_colors_mean = gdict_raw["sh"].mean(dim=[1,2]) # (B, 3)
+            render_colors_mean = renders.mean(dim=[2, 3])          # (B, 3)
+
+            txt_logfile = os.path.join(render_dir, "log.txt")
+
+            with open(txt_logfile, "a") as f:
+                for b in range(B):
+                    f.write(
+                        f"epoch:{epoch:04d} step:{global_step:06d} img_idx:{b:02d} "
+                        f"GT:[{gt_colors_mean[b,0]:.4f}, {gt_colors_mean[b,1]:.4f}, {gt_colors_mean[b,2]:.4f}] "
+                        f"SH:[{pred_colors_mean[b,0]:.4f}, {pred_colors_mean[b,1]:.4f}, {pred_colors_mean[b,2]:.4f}] "
+                        f"RENDER:[{render_colors_mean[b,0]:.4f}, {render_colors_mean[b,1]:.4f}, {render_colors_mean[b,2]:.4f}] \n"
+                    )
+                f.write("\n")
         global_step += 1
 
     writer.add_scalar("loss/epoch", epoch_loss/len(cache), epoch)
