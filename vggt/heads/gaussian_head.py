@@ -144,13 +144,17 @@ class Gaussianhead(nn.Module):#继承父类
         # 最后 conv2 输出通道顺序 = [offset(3) | scale(3) | rot(4) | sh | opacity(1)]
             # 给最后一个通道σ设为2
             # self.scratch.output_conv2[-1].bias[..., -1]   = 2.0          # σ⁻¹(0.88) ≈ α0.88, scratch.output_conv2[-1]是nn.Sequantial最后一层的conv结果
-            self.scratch.output_conv2[-1].bias[..., -1]   = -4.0   #调小初始化α
+            self.scratch.output_conv2[-1].bias[..., -1]   = -2.25  #调小初始化α
+            
             # 将前 3 个 scale 通道 bias 设为 log(0.03)
             self.scratch.output_conv2[-1].bias[..., -4:-1] = math.log(0.03)  # σ ≈0.03
             color_dim   = 3 * (self.sh_degree + 1) ** 2
             color_start = 3 + 3 + 4
             color_end   = color_start + color_dim
-            nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end],-2.0, 2.0)
+            nn.init.uniform_(self.scratch.output_conv2[-1].bias[color_start:color_end],0.0,1.8)
+                        # 用 0–0.8 区间的独立随机值初始化 3 个颜色 bias（等价于 torch.rand）
+            # self.scratch.output_conv2[-1].bias[color_start:color_end] = \
+            #     torch.rand_like(self.scratch.output_conv2[-1].bias[color_start:color_end]) * 0.8
         
         # if sh_degree == 0:
         # # 新增：初始化颜色 bias（3 个通道）到 [-2, 2]
@@ -220,9 +224,9 @@ class Gaussianhead(nn.Module):#继承父类
         else:
             return torch.cat(all_preds, dim=1), torch.cat(all_conf, dim=1)
 
-    def _forward_impl(#实际的特征生成与高斯参数回归
-    #整条流水线从最初的输入 (B,196,768) patch token序列，
-    #到最终的输出 (B·196, C_out, 16,16) 融合特征图，完成了序列→空间→多尺度融合→平滑的全部操作。
+    #实际的特征生成与高斯参数回归,整条pipeline从开始的(B, 196, 178)patch token
+    #到最终的输出(B*196, C_out, 16, 16)融合特征图, 完成了序列->空间->多尺度融合->平滑的全部操作
+    def _forward_impl(
         self,
         aggregated_tokens_list: List[torch.Tensor],
         images: torch.Tensor,
@@ -251,7 +255,26 @@ class Gaussianhead(nn.Module):#继承父类
 
         B, S, _, H, W = images.shape
 
+        # ------------------------------------------------------------------
+        # Infer patch grid (patch_h, patch_w) so that
+        #   patch_h * patch_w  ==  num_patch_tokens
+        # This is robust against a mistaken self.patch_size
+        # ------------------------------------------------------------------
+        # initial guess from image resolution
         patch_h, patch_w = H // self.patch_size, W // self.patch_size
+
+        # # number of *patch* tokens in the transformer sequence
+        # num_patch_tokens = (
+        #     aggregated_tokens_list[self.intermediate_layer_idx[0]].shape[2] - patch_start_idx
+        # )
+
+        # # if the guessed grid size is wrong, re‑infer from token length
+        # if patch_h * patch_w != num_patch_tokens:
+        #     # try to factor num_patch_tokens into two integers as close as possible
+        #     patch_h = int(math.sqrt(num_patch_tokens))
+        #     while num_patch_tokens % patch_h != 0:
+        #         patch_h -= 1
+        #     patch_w = num_patch_tokens // patch_h
 
         out = []
         dpt_idx = 0
@@ -318,10 +341,12 @@ class Gaussianhead(nn.Module):#继承父类
         scales = reg_dense_scales(scales)
         rotations = reg_dense_rotation(rotations)
         
-        # sh = reg_dense_sh(sh)
+        sh = reg_dense_sh(sh)
         opacities = reg_dense_opacities(opacities)
-        colors = sh[..., 0] * 0.2820948 # sh(..., RGB, d_sh), 取出第0维, 并还原成RGB真实值
-
+        # colors = sh[..., 0] * 0.2820948 +0.5# sh(..., RGB, d_sh), 取出第0维, 并还原成RGB真实值
+        colors = torch.sigmoid(sh[..., 0])  # 无 clamp，梯度畅通,不还原颜色,直接传入
+        colors = colors * opacities
+        # colors = colors.clamp(0.0, 1.0)           # 额外保险，防止负值和过曝
         res = {
             'scales': scales,
             'rotations': rotations,
@@ -329,10 +354,11 @@ class Gaussianhead(nn.Module):#继承父类
             'opacities': opacities,
             'colors': colors
         }
-        if use_offsets:
-            res['means'] = point_map.detach() + offset# point_map 原本可能是从前面可微过程（multi‐scale 融合）中求得的张量，默认会继续参与梯度追踪。调用 .detach() 后不再追踪梯度
-        else:
-            res['means'] = point_map.detach()
+        res['means'] = point_map+ offset
+        # if use_offsets:
+        #     res['means'] = point_map.detach() + offset# point_map 原本可能是从前面可微过程（multi‐scale 融合）中求得的张量，默认会继续参与梯度追踪。调用 .detach() 后不再追踪梯度
+        # else:
+        #     res['means'] = point_map.detach()
 
         return res
 
@@ -441,7 +467,7 @@ def reg_dense_offsets(xyz, shift=6.0):
     """
     #	xyz 的形状 假设为 (..., 3)，最后一维长度为 3，表示每个位置上的三维向量 (x,y,z), .norm计算x,y,z的根号平方和
     d = xyz.norm(dim=-1, keepdim=True) # 计算平均距离D
-    xyz = xyz / d.clip(min=1e-8) #将 d 中所有小于 1e-8 的元素都替换成 1e-8，而大于等于 1e-8 的元素保持不变。
+    xyz = xyz / d.clip(min=1e-6) #将 d 中所有小于 1e-8 的元素都替换成 1e-8，而大于等于 1e-8 的元素保持不变。
     #torch.zeros_like(d)创建和d相同size的全零张量
     #offsets = xyz * (torch.exp(d - shift) - torch.exp(torch.zeros_like(d) - shift)) # d一般很小, exp(d-6)=0.0025, 确保d = 0时输出为0, d > 0时输出很小的offsets
     offsets = 0.1 * torch.tanh(xyz) #修改offsets定义
@@ -454,29 +480,45 @@ def reg_dense_offsets(xyz, shift=6.0):
 #     """
 #     scales = scales.exp()
 #     return scales
-def reg_dense_scales(scales, beta=10.0, min_sigma=0.001, max_sigma=0.005):#调小scales上限0.1->0.04 #调小上下限 下限0.01 -> 0.005, 上线0.04 -> 0.01
-    scales = F.softplus(scales, beta=beta)
-    return torch.clamp(scales, min_sigma, max_sigma)   # ← 非原地
+# def reg_dense_scales(scales, beta=10.0, min_sigma=0.005, max_sigma=0.04):#调小scales上限0.1->0.04 #调小上下限 下限0.01 -> 0.005, 上线0.04 -> 0.01
+#     scales = F.softplus(scales, beta=beta)
+#     return torch.clamp(scales, min_sigma, max_sigma)   # ← 非原地
+def reg_dense_scales(scales, min_sigma: float = 0.002, max_sigma: float = 0.01):
+    """
+    Smoothly map unconstrained logits to a positive scale range while keeping gradients alive.
+    Uses a sigmoid instead of hard clamp so ∂σ/∂logit ≠ 0 everywhere.
+    """
+    scales = torch.sigmoid(scales)               # (0, 1)
+    return min_sigma + (max_sigma - min_sigma) * scales
+
 # @MODIFIED
-def reg_dense_rotation(rotations, eps=1e-8):
+def reg_dense_rotation(rotations, eps=1e-6):
     """
     Apply PixelSplat's rotation normalization
     """
     return rotations / (rotations.norm(dim=-1, keepdim=True) + eps)# 做rotation normalization
 
-# # @MODIFIED
-# def reg_dense_sh(sh):
-#     """
-#     Apply PixelSplat's spherical harmonic postprocessing
-#     """
-#     # sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3) #重排sh张量,从(..., RGB * d_sh) -> (..., RGB, d_sh)
-#     sh = rearrange(sh, '... (xyz d_sh) -> ... d_sh xyz', xyz=3)#重排成(..., d_sh, RGB)
-    
-#     return sh
+# @MODIFIED
+def reg_dense_sh(sh):
+    """
+    Apply PixelSplat's spherical harmonic postprocessing
+    """
+    # sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3) #重排sh张量,从(..., RGB * d_sh) -> (..., RGB, d_sh)
+    sh = rearrange(sh, '... (xyz d_sh) -> ... xyz d_sh', xyz=3)#重排成(..., d_sh, RGB)
+    # sh[..., 0, :] *= 0.2820948
+    return sh
 
 # @MODIFIED
 def reg_dense_opacities(opacities):
-    return torch.clamp(opacities.sigmoid(), 1e-3, 0.98)  # ← 非原地
+    # # return torch.clamp(opacities.sigmoid(), 1e-4, 0.98)  # ← 非原地
+    # return torch.nn.functional.softplus(opacities) + 1e-4
+    """
+    Squash opacities into (1 e‑3, 0.95) smoothly to avoid gradient starvation.
+    """
+    return 0.95 * torch.sigmoid(opacities) + 1e-3
+
+    # 改为 Softplus + 微幅线性缩放，保证梯度畅通
+    # return 0.95 * torch.sigmoid(opacities) + 1e-3
 
 
 class ResidualConvUnit(nn.Module):

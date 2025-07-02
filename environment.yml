@@ -47,7 +47,7 @@
 # # pip install --no-build-isolation --no-cache-dir git+https://github.com/nerfstudio-project/gsplat.git
 
 
-name: 3dgs           # 新环境名称，可自定
+name: 3dgs1           # 新环境名称，可自定
 variables:
   CUDA_HOME: "$CONDA_PREFIX"
   TORCH_CUDA_ARCH_LIST: "8.9;8.0;7.5"
@@ -91,10 +91,10 @@ dependencies:
 
 #vggt依赖
 #       # 基础科学包 & 通用工具
-#       - python -m pip install --upgrade \
-#       - numpy==1.26.1 pillow tqdm einops safetensors \
-#       - hydra-core omegaconf requests \
-#       - opencv-python scipy matplotlib trimesh
+      # - python -m pip install --upgrade \
+      # - numpy==1.26.1 pillow tqdm einops safetensors \
+      # - hydra-core omegaconf requests \
+      # - opencv-python scipy matplotlib trimesh
 
 # # 深度学习 & 服务/前端
 #       - python -m pip install --upgrade \
