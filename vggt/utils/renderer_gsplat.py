@@ -2,7 +2,7 @@ import torch
 import gsplat
 
 
-@torch.amp.autocast("cuda", enabled=False)   # 渲染阶段保持 fp32
+@torch.amp.autocast("cuda", enabled=False)   # fp32
 def render_gaussians(
     gdict: dict,   # keys = means / scales / rotations / opacities
     # sh_degree: int,
@@ -10,7 +10,6 @@ def render_gaussians(
     viewmats: torch.Tensor,   # (B,4,4)  or (B,1,3,4) / (B,3,4), extr
     H: int,
     W: int,
-    # eps2d: float,
     bg: str | None = "white",
     tile: int = 16,
 
@@ -22,7 +21,7 @@ def render_gaussians(
     B, N, _ = gdict["means"].shape  # (B,N,3)
 
     # ------------------------------------------------------------------
-    # 0. 处理 viewmats 形状与 dtype  → (B,1,4,4) float32
+    # 0. rearrange viewmats and dtype  → (B,1,4,4) float32
     # ------------------------------------------------------------------
     if viewmats.ndim == 4 and viewmats.shape[1] == 1:  # (B,1,3,4)
         viewmats = viewmats.squeeze(1)                 # (B,3,4)
@@ -35,21 +34,18 @@ def render_gaussians(
 
     if viewmats.ndim == 3:  # (B,4,4)
         viewmats = viewmats.unsqueeze(1)               # (B,1,4,4)
-    viewmats = viewmats.float()                        # 确保 fp32
+    viewmats = viewmats.float()                        # fp32
 
     # ------------------------------------------------------------------
-    # 1. 处理 Ks 形状与 dtype         → (B,1,3,3) float32
+    # 1. rearrange Ks and dtype         → (B,1,3,3) float32
     # ------------------------------------------------------------------
-    # 兼容 “B=1, C>1” 形状  (1, C, 3, 3)
+    #  “B=1, C>1”, (1, C, 3, 3)
     if Ks.ndim == 4 and Ks.shape[0] == 1 and Ks.shape[-2:] == (3, 3):
-        Ks = Ks.float()                            # 保持 fp32
-        # 直接留成 (1, C, 3, 3) 让后续 assert 通过
+        Ks = Ks.float()                            # fp32
     elif Ks.ndim == 4 and Ks.shape[1] == 1:        # (B,1,3,3)
-        # Ks = Ks.squeeze(1).float()                   # (B,3,3)
         Ks = Ks.float()
     elif Ks.ndim == 3:                                 # (B,3,3)
         Ks = Ks.unsqueeze(1).float()                   # 变成(B, 1, 3, 3)
-        # Ks = Ks.float()                                # 变成(B, 3, 3)
     elif Ks.ndim == 2 and Ks.shape[1] == 4:            # (B,4)
         fx, fy, cx, cy = Ks.t()
         Ks = torch.stack([
@@ -100,15 +96,8 @@ def render_gaussians(
                                    dtype=torch.float32),
     )  # → (B, C, H, W, 3)
 
-    # -------- 改动：兼容 C>1 的情形 ----------------------------
+    # --------  C>1  ----------------------------
     rgb = rgb.permute(0, 1, 4, 2, 3)   # (B, C, 3, H, W)
     B, C = rgb.shape[:2]
-    rgb = rgb.reshape(B * C, 3, H, W)  # 展平成 (B·C, 3, H, W)
+    rgb = rgb.reshape(B * C, 3, H, W)  # flatten -> (B·C, 3, H, W)
     return rgb.clamp(0, 1)
-    # return rgb.squeeze(1).permute(0, 3, 1, 2) # (B,3,H,W)
-    # 用squeeze使(B, 1, H, W, 3) -> (B, H, W, 3)
-#     return (
-#     rgb.squeeze(1).permute(0,3,1,2)        # (B,3,H,W)
-#        .clamp(0,1)
-#        .nan_to_num_(nan=0.0, posinf=1.0, neginf=0.0)   # 必须 inplace
-# )
