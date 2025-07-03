@@ -47,14 +47,14 @@ def flatten_gdict(gdict: dict, B: int):
 # -----------------------------------------------------------------------------
 
 writer_path = "runs/gauss_train_9"
-img_log_path = "renders/gauss_train_9"
+img_log_path = "renders/gauss_train_10"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype  = torch.bfloat16 if (device=="cuda" and torch.cuda.get_device_capability()[0] >= 8) else torch.float16
 print(f"Device: {device},  Mixed-Precision dtype: {dtype}")
 
 # 1) 读图
-img_dir  = "images"
+img_dir  = "large_images"
 patterns = ["*.jpg","*.JPG","*.jpeg","*.JPEG"]
 paths = sorted(p for pat in patterns for p in glob.glob(os.path.join(img_dir, pat)))
 print("Found", len(paths), "images")
@@ -115,7 +115,7 @@ print("gaussian head created")
 
 import torch # ensure torch is imported for optimizer param grouping
 # 3）定义loss与optimizer策略
-warmup_epochs = 1000  # 设定前多少个epoch只用MSE做预热
+warmup_epochs = 30000  # 设定前多少个epoch只用MSE做预热
 
 opt = torch.optim.Adam(g_head.parameters(), lr=1e-4)
 crit = nn.MSELoss()
@@ -129,7 +129,7 @@ writer = SummaryWriter(writer_path)
 os.makedirs(img_log_path, exist_ok=True)
 
 global_step = 0
-for epoch in range(1, 30000):
+for epoch in range(1, 50000):
     epoch_loss = 0.0
     for entry in tqdm(cache, desc=f"Epoch {epoch}/30000"):
         imgs = entry["imgs"].to(device)               # directly retrieve tensor
@@ -217,7 +217,7 @@ for epoch in range(1, 30000):
         writer.add_scalar("lpips/batch", lpips_loss.item(), global_step)
         writer.add_scalar("ssim/batch", ssim_loss.item(), global_step)
 
-        if global_step % 500 == 0:
+        if global_step % 5000 == 0:
             output_path = os.path.join(
                         img_log_path,
                         f"ep{epoch:02d}_it{global_step:06d}.png"
