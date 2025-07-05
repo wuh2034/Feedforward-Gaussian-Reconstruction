@@ -27,9 +27,10 @@ def build_loader(
     num_workers: int = 4,
 ):
     """
-    每次迭代输出 (imgs, scene_id)
+    每次迭代输出 (imgs, scene_id, img_names)
       imgs  : (img_num,3,H,W)
       scene_id : str
+      img_names : List[str]
     """
     dataset = SceneDataset(root_dir, scene_ids, img_num, stride)
 
@@ -46,7 +47,7 @@ def build_loader(
         batch_size=1,                # 1 个 scene/批
         sampler=sampler,
         shuffle=False if sampler else shuffle,
-        collate_fn=lambda x: x[0],   # 去掉 list 外壳
+        collate_fn=lambda x: x[0],   # 去掉 list 外壳，返回 (imgs, scene_id, img_names)
         num_workers=num_workers,
         pin_memory=True,
     )

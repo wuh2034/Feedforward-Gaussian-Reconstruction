@@ -1,4 +1,3 @@
-
 # train.py ─――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
 """
 训练流程（满足最新需求）：
@@ -63,7 +62,8 @@ def build_cache(loader, vggt_model):
     """对 loader 进行 VGGT 前向，返回 list(dict)，并全部搬到 CPU。"""
     cache = []
     with torch.amp.autocast("cuda", dtype=dtype):
-        for imgs, scene_id in loader:              # imgs:(N,3,H,W)
+        for imgs, scene_id, img_names in loader:              # imgs:(N,3,H,W)
+            print(f"[Select] scene {scene_id}: {', '.join(img_names)}")
             imgs = imgs.to(device)
             N, _, H, W = imgs.shape
             imgs_in = imgs.unsqueeze(1)           # (N,1,3,H,W)
@@ -82,6 +82,7 @@ def build_cache(loader, vggt_model):
                 "intr"     : intr.cpu(),
                 "extr"     : extr.cpu(),
                 "name"     : scene_id,
+                "img_names": img_names,
             })
     return cache
 # -----------------------------------------------------------------------------

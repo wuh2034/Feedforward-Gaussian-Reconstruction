@@ -8,7 +8,7 @@ data_root/
     dslr/resized_undistorted_images/*.jpg
 
 scene_id 列表由 split 文件 (.txt) 提供；每行一个 scene_id。
-Dataset 返回 (imgs, scene_id)，其中 imgs 已经过 vggt.utils.load_fn.load_and_preprocess_images
+Dataset 返回 (imgs, scene_id, img_names)，其中 imgs 已经过 vggt.utils.load_fn.load_and_preprocess_images
 """
 
 import os, glob, torch, numpy as np
@@ -45,7 +45,7 @@ class SceneDataset(Dataset):
         return [(start + i * self.stride) % n_total for i in range(self.img_num)]
 
     # ---------- main ---------------------------------------------------------
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, str]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, str, List[str]]:
         scene_id = self.scene_ids[idx]
         img_dir  = os.path.join(
             self.root_dir, scene_id, "dslr", "resized_undistorted_images"
@@ -58,6 +58,7 @@ class SceneDataset(Dataset):
 
         sel_idx  = self._sample_indices(len(img_paths))
         sel_imgs = [img_paths[i] for i in sel_idx]
+        img_names = [os.path.basename(p) for p in sel_imgs]
         imgs     = self.tfm(sel_imgs)          # (M,3,H,W), float32, 0–1
 
-        return imgs, scene_id
+        return imgs, scene_id, img_names
