@@ -1,22 +1,14 @@
-# train.py ─――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――
+# train.py  ──────────────────────────────────────────────────────────────────
 """
-训练流程（满足最新需求）：
-    for epoch:
-        1. 调 build_train_val 重新生成 train/val DataLoader
-           （内部 RandomSampler 保证每 epoch 抽不同 scene）
-        2. ──【特征提取阶段】─────────────────────────────
-           2.1 实例化 VGGT (fp16/bf16) → GPU
-           2.2 遍历 train_loader  →   cache_train  (放 CPU)
-               遍历 val_loader    →   cache_val
-           2.3 del vggt; torch.cuda.empty_cache()  # 释放显存
-        3. ──【优化阶段】───────────────────────────────
-           3.1 使用 cache_train 做前向 + BP，更新 Gaussian Head
-           3.2 使用 cache_val   只做前向，统计验证损失
-        4. log 结果 & 保存可视化
+每个 epoch：
+    1. 重新构建 train/val DataLoader（随机抽 scene）
+    2. VGGT 前向提特征 → 缓存到 CPU
+    3. 释放 VGGT 显存
+    4. 用 Gaussian Head 训练，再做验证
+    5. 保存 (GT|Render) 拼图，数量 = TRAIN_BATCH_SCENES×IMG_NUM_TRAIN
 """
 
-import os, gc, torch
-import torch.nn as nn
+import os, gc, torch, torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import save_image
 from tqdm import tqdm
@@ -27,16 +19,15 @@ from vggt.models.vggt import VGGT
 from vggt.heads.gaussian_head import Gaussianhead
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.renderer_gsplat import render_gaussians
+from dataloader import build_train_val          # ← 你的 dataloader_factory.py
 
-from dataloader import build_train_val
-
-# =============== hyper params ===============================================
+# ----------------- 训练超参 -----------------
 ROOT_DIR            = "/usr/prakt/s0012/scannetpp/data"
 TRAIN_SPLIT_TXT     = "/usr/prakt/s0012/scannetpp/splits/nvs_sem_train.txt"
 VAL_SPLIT_TXT       = "/usr/prakt/s0012/scannetpp/splits/nvs_sem_val.txt"
-TRAIN_BATCH_SCENES  = 4
+TRAIN_BATCH_SCENES  = 4           # 每 epoch 随机抽 4 个 scene 训练
 VAL_BATCH_SCENES    = 2
-IMG_NUM_TRAIN       = 4
+IMG_NUM_TRAIN       = 4           # 每 scene 取 4 张图
 IMG_NUM_VAL         = 4
 STRIDE              = 3
 NUM_WORKERS         = 4
@@ -46,10 +37,10 @@ IMG_LOG_DIR         = "renders/scannetpp"
 os.makedirs(IMG_LOG_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-dtype  = torch.bfloat16 if (device=="cuda" and torch.cuda.get_device_capability()[0]>=8) else torch.float16
+dtype  = torch.bfloat16 if device == "cuda" and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
 print(f"[Init] device={device}, dtype={dtype}")
 
-# ------------------- helper --------------------------------------------------
+# ----------------- util -----------------
 def flatten_gdict(gdict: dict, B: int):
     out = {}
     for k, v in gdict.items():
@@ -59,14 +50,14 @@ def flatten_gdict(gdict: dict, B: int):
 
 @torch.no_grad()
 def build_cache(loader, vggt_model):
-    """对 loader 进行 VGGT 前向，返回 list(dict)，并全部搬到 CPU。"""
+    """把 loader 中所有 batch 通过 VGGT 前向，全部转存到 CPU。"""
     cache = []
     with torch.amp.autocast("cuda", dtype=dtype):
-        for imgs, scene_id, img_names in loader:              # imgs:(N,3,H,W)
+        for imgs, scene_id, img_names in loader:
             print(f"[Select] scene {scene_id}: {', '.join(img_names)}")
-            imgs = imgs.to(device)
+            imgs  = imgs.to(device)                       # (N,3,H,W)
             N, _, H, W = imgs.shape
-            imgs_in = imgs.unsqueeze(1)           # (N,1,3,H,W)
+            imgs_in = imgs.unsqueeze(1)
 
             tok_list, ps_idx = vggt_model.aggregator(imgs_in)
             preds            = vggt_model(imgs)
@@ -74,41 +65,38 @@ def build_cache(loader, vggt_model):
             pose_enc         = preds["pose_enc"]
             extr, intr       = pose_encoding_to_extri_intri(pose_enc, (H, W))
 
-            cache.append({
-                "imgs"     : imgs.cpu(),
-                "tok_list" : [t.cpu() for t in tok_list],
-                "ps_idx"   : ps_idx,
-                "point_map": point_map.cpu(),
-                "intr"     : intr.cpu(),
-                "extr"     : extr.cpu(),
-                "name"     : scene_id,
-                "img_names": img_names,
-            })
+            cache.append(dict(
+                imgs      = imgs.cpu(),
+                tok_list  = [t.cpu() for t in tok_list],
+                ps_idx    = ps_idx,
+                point_map = point_map.cpu(),
+                intr      = intr.cpu(),
+                extr      = extr.cpu(),
+                name      = scene_id,
+                img_names = img_names,
+            ))
     return cache
-# -----------------------------------------------------------------------------
+# ----------------------------------------
 
-# ------------------- Gaussian Head & loss ------------------------------------
-print("[Init] building Gaussian Head …")
-embed_demo = VGGT.from_pretrained("facebook/VGGT-1B")
-embed_dim  = embed_demo.embed_dim
-del embed_demo
-out_dim = 3 + 3 + 4 + 3*(0+1)**2 + 1
-g_head  = Gaussianhead(2*embed_dim, out_dim,
-                       activation="exp", conf_activation="expp1",
-                       sh_degree=0).to(device)
-opt        = torch.optim.Adam(g_head.parameters(), lr=1e-4)
-crit_mse   = nn.MSELoss()
-lpips_fn   = lpips.LPIPS(net="alex").to(device)
-ssim_fn    = SSIM(data_range=1.0).to(device)
-LP_W, SS_W = 0.2, 0.2
-writer     = SummaryWriter(LOG_DIR)
+# Gaussian Head（唯一需要训练）
+print("[Init] build Gaussian Head …")
+_emb = VGGT.from_pretrained("facebook/VGGT-1B"); EMB_DIM = _emb.embed_dim; del _emb
+g_head = Gaussianhead(
+    2*EMB_DIM, 3+3+4+3*(0+1)**2+1, activation="exp",
+    conf_activation="expp1", sh_degree=0
+).to(device)
+opt = torch.optim.Adam(g_head.parameters(), lr=1e-4)
+mse_fn  = nn.MSELoss()
+lpips_fn= lpips.LPIPS(net="alex").to(device)
+ssim_fn = SSIM(data_range=1.0).to(device)
+LP_W, SS_W = 0.0, 0.0    # 若需 LPIPS/SSIM 打开权重
+writer = SummaryWriter(LOG_DIR)
 
-# ============================================================================#
 global_step = 0
 for epoch in range(1, NUM_EPOCHS + 1):
-    print(f"\n========== Epoch {epoch} ==========")
+    print(f"\n===== Epoch {epoch} =====")
 
-    # 1. 重新生成 loader（保证每 epoch 随机抽 scene）
+    # ---- 1. DataLoader 重新随机 ----
     train_loader, val_loader = build_train_val(
         root_dir           = ROOT_DIR,
         train_split_txt    = TRAIN_SPLIT_TXT,
@@ -118,11 +106,10 @@ for epoch in range(1, NUM_EPOCHS + 1):
         val_batch_scenes   = VAL_BATCH_SCENES,
         val_img_num        = IMG_NUM_VAL,
         stride             = STRIDE,
-        num_workers        = NUM_WORKERS, # num of cpu
+        num_workers        = NUM_WORKERS,
     )
 
-    # 2. 特征提取阶段：实例化 VGGT → cache → 释放
-    print("[Epoch] VGGT forward & caching …")
+    # ---- 2. VGGT 前向提特征并缓存 ----
     vggt = VGGT.from_pretrained("facebook/VGGT-1B").eval().to(device)
     for p in vggt.parameters(): p.requires_grad = False
 
@@ -132,99 +119,80 @@ for epoch in range(1, NUM_EPOCHS + 1):
     del vggt
     torch.cuda.empty_cache()
 
-    # 3. TRAIN -----------------------------------------------------------------
+    # ---- 3. TRAIN ----
     g_head.train()
+    viz_gt, viz_rd = [], []             # ← 收集可视化
     loss_train_epoch = 0.0
     for entry in tqdm(train_cache, desc="Train"):
-        imgs      = entry["imgs"].to(device)
-        point_map = entry["point_map"].to(device)
-        tok_list  = [t.to(device) for t in entry["tok_list"]]
-        ps_idx    = entry["ps_idx"]
-        intr      = entry["intr"].to(device).float()  # (1,N,3,3)
-        extr      = entry["extr"].to(device).float()  # (1,N,3,4)
-
-        # pad extr to 4×4
-        pad = torch.tensor([0,0,0,1], device=extr.device).view(1,1,1,4)
-        extr = torch.cat([extr, pad.expand_as(extr[:,:,:1,:])], dim=-2)
-
+        imgs   = entry["imgs"].to(device)
         N, _, H, W = imgs.shape
         imgs_in = imgs.unsqueeze(1)
 
-        gdict_raw = g_head(tok_list, imgs_in, ps_idx, point_map)
+        tok = [t.to(device) for t in entry["tok_list"]]
+        intr = entry["intr"].to(device).float()
+        extr = entry["extr"].to(device).float()
+        pad  = torch.tensor([0,0,0,1], device=extr.device).view(1,1,1,4)
+        extr = torch.cat([extr, pad.expand_as(extr[:,:,:1,:])], dim=-2)
+
+        gdict_raw = g_head(tok, imgs_in, entry["ps_idx"], entry["point_map"].to(device))
         gdict     = flatten_gdict(gdict_raw, B=N)
         for k,v in gdict.items():
             if v.ndim == 3: gdict[k] = v.reshape(1,-1,v.shape[-1])
-            else:           gdict[k] = v.reshape(1,-1)
+            else: gdict[k] = v.reshape(1,-1)
 
         renders = render_gaussians(gdict, intr, extr, H, W)
 
-        with torch.amp.autocast("cuda", dtype=dtype):
-            mse   = crit_mse(renders, imgs)
-            # lp    = lpips_fn(renders*2-1, imgs*2-1).mean()
-            # ssim  = 1 - ssim_fn(renders, imgs)
-            # loss  = mse + LP_W*lp + SS_W*ssim
-            loss  = mse
+        viz_gt.append(imgs.cpu())
+        viz_rd.append(renders.cpu())
 
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-
+        loss = mse_fn(renders, imgs)  # + LP_W*lpips ... 如需要
+        opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
         loss_train_epoch += loss.item()
         writer.add_scalar("loss/train_batch", loss.item(), global_step)
         global_step += 1
 
     loss_train_epoch /= len(train_cache)
     writer.add_scalar("loss/train_epoch", loss_train_epoch, epoch)
-    print(f"[Epoch] train loss = {loss_train_epoch:.5f}")
+    print(f"train loss = {loss_train_epoch:.5f}")
 
-    # 4. VALIDATION ------------------------------------------------------------
-    g_head.eval()
-    loss_val_epoch = 0.0
+    # ---- 4. VALIDATION ----
+    g_head.eval(); loss_val_epoch = 0.0
     with torch.no_grad():
         for entry in tqdm(val_cache, desc="Val  "):
-            imgs      = entry["imgs"].to(device)
-            point_map = entry["point_map"].to(device)
-            tok_list  = [t.to(device) for t in entry["tok_list"]]
-            ps_idx    = entry["ps_idx"]
-            intr      = entry["intr"].to(device).float()
-            extr      = entry["extr"].to(device).float()
-            pad       = torch.tensor([0,0,0,1], device=extr.device).view(1,1,1,4)
-            extr      = torch.cat([extr, pad.expand_as(extr[:,:,:1,:])], dim=-2)
-
-            N, _, H, W = imgs.shape
+            imgs = entry["imgs"].to(device); N, _, H, W = imgs.shape
             imgs_in = imgs.unsqueeze(1)
+            tok = [t.to(device) for t in entry["tok_list"]]
+            intr = entry["intr"].to(device).float()
+            extr = entry["extr"].to(device).float()
+            pad  = torch.tensor([0,0,0,1], device=extr.device).view(1,1,1,4)
+            extr = torch.cat([extr, pad.expand_as(extr[:,:,:1,:])], dim=-2)
 
-            gdict_raw = g_head(tok_list, imgs_in, ps_idx, point_map)
-            gdict     = flatten_gdict(gdict_raw, B=N)
+            gdict_raw = g_head(tok, imgs_in, entry["ps_idx"], entry["point_map"].to(device))
+            gdict = flatten_gdict(gdict_raw, B=N)
             for k,v in gdict.items():
                 if v.ndim == 3: gdict[k] = v.reshape(1,-1,v.shape[-1])
-                else:           gdict[k] = v.reshape(1,-1)
+                else: gdict[k] = v.reshape(1,-1)
 
             renders = render_gaussians(gdict, intr, extr, H, W)
-
-            mse   = crit_mse(renders, imgs)
-            # lp    = lpips_fn(renders*2-1, imgs*2-1).mean()
-            # ssim  = 1 - ssim_fn(renders, imgs)
-            # loss  = mse + LP_W*lp + SS_W*ssim
-            loss = mse
-            loss_val_epoch += loss.item()
+            loss_val_epoch += mse_fn(renders, imgs).item()
 
     loss_val_epoch /= len(val_cache)
     writer.add_scalar("loss/val_epoch", loss_val_epoch, epoch)
-    print(f"[Epoch] val   loss = {loss_val_epoch:.5f}")
+    print(f"val   loss = {loss_val_epoch:.5f}")
 
-    # 5. 可视化
+    # ---- 5. 保存 (GT|Render) 拼图 ----
     if epoch % 10 == 0:
+        grid = torch.cat([torch.cat(viz_gt, 0), torch.cat(viz_rd, 0)], 0)
         save_image(
-            torch.cat([imgs, renders], 0).cpu(),
-            os.path.join(IMG_LOG_DIR, f"epoch_{epoch:05d}.png"),
+            grid,
+            os.path.join(IMG_LOG_DIR, f"epoch_{epoch:04d}.png"),
+            nrow=IMG_NUM_TRAIN,           # 每行放 IMG_NUM_TRAIN 张
             normalize=True, value_range=(0,1)
         )
 
-    # 6. 清理
-    del train_cache, val_cache
-    gc.collect()
-    torch.cuda.empty_cache()
+    # ---- 6. 清理 ----
+    del train_cache, val_cache, viz_gt, viz_rd
+    gc.collect(); torch.cuda.empty_cache()
 
 writer.close()
 print("Training complete ✅")
