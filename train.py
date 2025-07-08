@@ -43,7 +43,15 @@ NUM_WORKERS         = 4
 NUM_EPOCHS          = 30000
 LOG_DIR             = os.path.join(out_dir, f"runs/gauss_train_{run_id}")
 IMG_LOG_DIR         = os.path.join(out_dir, "renders", run_id)
+IMG_LOG_INTERVAL    = 1
+MODEL_PATH          = f"/home/stud/syua/storage/user/vggt-guassian/checkpoints/20250708-154652/checkpoint_epoch0301.pth"        # 要加载的预训练模型的文件地址，精确到.pth文件，无预训练模型请输入 None
+CKPT_DIR            = os.path.join(out_dir, "checkpoints", run_id)  # ckpt 的保存文件夹
+CKPT_INTERVAL       = 1          # 每多少个 epoch 保存一次 ckpt
+
+LR_RATE             = 1e-4
+
 os.makedirs(IMG_LOG_DIR, exist_ok=True)
+os.makedirs(CKPT_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype  = torch.bfloat16 if device == "cuda" and torch.cuda.get_device_capability()[0] >= 8 else torch.float16
@@ -136,7 +144,8 @@ g_head = Gaussianhead(
     2*EMB_DIM, 3+3+4+3*(0+1)**2+1, activation="exp",
     conf_activation="expp1", sh_degree=0
 ).to(device)
-opt = torch.optim.Adam(g_head.parameters(), lr=1e-4)
+
+opt = torch.optim.Adam(g_head.parameters(), lr=LR_RATE)
 mse_fn  = nn.MSELoss()
 lpips_fn= lpips.LPIPS(net="alex").to(device)
 ssim_fn = SSIM(data_range=1.0).to(device)
@@ -144,7 +153,20 @@ LP_W, SS_W = 0.0, 0.0    # 若需 LPIPS/SSIM 打开权重
 writer = SummaryWriter(LOG_DIR)
 
 global_step = 0
-for epoch in range(1, NUM_EPOCHS + 1):
+start_epoch = 1
+
+if MODEL_PATH is not None:
+    print(f"[Init] load ckpt from {MODEL_PATH} …")
+    ckpt = torch.load(MODEL_PATH, weights_only=True)
+    g_head.load_state_dict(ckpt["model_state_dict"])
+    opt.load_state_dict(ckpt["optimizer_state_dict"])
+    start_epoch = ckpt["epoch"] + 1
+    last_train_loss  = ckpt.get("loss_train", None)
+    last_val_loss    = ckpt.get("loss_val",   None)
+    print(f"[Init] Resuming from epoch {ckpt['epoch']}, train_loss={last_train_loss:.5f}, val_loss={last_val_loss:.5f}")
+print("[Init] initialization done")
+
+for epoch in range(start_epoch, NUM_EPOCHS + 1):
     print(f"\n===== Epoch {epoch} =====")
 
     # ---- 1. DataLoader 重新随机 ----
@@ -262,8 +284,8 @@ for epoch in range(1, NUM_EPOCHS + 1):
     writer.add_scalar("loss/val_epoch", loss_val_epoch, epoch)
     print(f"val   loss = {loss_val_epoch:.5f}")
 
-    # ---- 5. 保存 (GT|Render) 拼图 ----
-    if epoch % 10 == 0:
+    # ---- 5. 保存 (GT|Render) 拼图 以及 ckpt ----
+    if epoch % IMG_LOG_INTERVAL == 0:
         grid = torch.cat([torch.cat(viz_gt, 0), torch.cat(viz_rd, 0)], 0)
         save_image(
             grid,
@@ -279,6 +301,19 @@ for epoch in range(1, NUM_EPOCHS + 1):
             nrow=IMG_NUM_VAL,           # 每行放 IMG_NUM_TRAIN 张
             normalize=True, value_range=(0,1)
         )
+
+    if epoch % CKPT_INTERVAL == 0:
+        ckpt = {
+            "epoch":                epoch,                   # 当前 epoch
+            "model_state_dict":     g_head.state_dict(),     # Gaussian Head 权重
+            "optimizer_state_dict": opt.state_dict(),        # 优化器状态
+            "loss_train":           loss_train_epoch,        # 最后一个 epoch 训练损失
+            "loss_val":             loss_val_epoch,          # 最后一个 epoch 验证损失
+        }
+        ckpt_path = os.path.join(CKPT_DIR, f"gauss_head_ckpt_epoch{epoch:04d}.pth")
+        torch.save(ckpt, ckpt_path)
+        print(f"[Checkpoint] Full checkpoint saved to {ckpt_path}")
+
 
     # ---- 6. 清理 ----
     del train_cache, val_cache, viz_gt, viz_rd, viz_gt_val, viz_rd_val
