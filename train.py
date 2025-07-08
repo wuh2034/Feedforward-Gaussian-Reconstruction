@@ -173,7 +173,7 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
     # ---- 3. TRAIN ----
     g_head.train()
-    viz_gt, viz_rd = [], []             # ← 收集可视化
+    viz_gt, viz_rd, viz_gt_val, viz_rd_val = [], [], [], []  # ← 收集可视化
     loss_train_epoch = 0.0
     for entry in tqdm(train_cache, desc="Train"):
         # 主视图数据
@@ -254,6 +254,8 @@ for epoch in range(1, NUM_EPOCHS + 1):
                 else: gdict[k] = v.reshape(1,-1)
 
             renders = render_gaussians(gdict, intr, extr, H, W)
+            viz_gt_val.append(imgs_aux.cpu())
+            viz_rd_val.append(renders_aux.cpu())
             loss_val_epoch += mse_fn(renders, imgs).item()
 
     loss_val_epoch /= len(val_cache)
@@ -265,13 +267,21 @@ for epoch in range(1, NUM_EPOCHS + 1):
         grid = torch.cat([torch.cat(viz_gt, 0), torch.cat(viz_rd, 0)], 0)
         save_image(
             grid,
-            os.path.join(IMG_LOG_DIR, f"epoch_{epoch:04d}.png"),
-            nrow=IMG_NUM_TRAIN,           # 每行放 IMG_NUM_TRAIN 张
+            os.path.join(IMG_LOG_DIR, f"epoch_{epoch:04d}_tr.png"),
+            nrow=IMG_NUM_TRAIN+IMG_NUM_AUX,           # 每行放 IMG_NUM_TRAIN 张
+            normalize=True, value_range=(0,1)
+        )
+
+        grid_val = torch.cat([torch.cat(viz_gt_val, 0), torch.cat(viz_rd_val, 0)], 0)
+        save_image(
+            grid_val,
+            os.path.join(IMG_LOG_DIR, f"epoch_{epoch:04d}_val.png"),
+            nrow=IMG_NUM_VAL,           # 每行放 IMG_NUM_TRAIN 张
             normalize=True, value_range=(0,1)
         )
 
     # ---- 6. 清理 ----
-    del train_cache, val_cache, viz_gt, viz_rd
+    del train_cache, val_cache, viz_gt, viz_rd, viz_gt_val, viz_rd_val
     gc.collect(); torch.cuda.empty_cache()
 
 writer.close()
