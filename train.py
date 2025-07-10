@@ -33,8 +33,8 @@ ROOT_DIR            = "/usr/prakt/s0012/scannetpp/data"
 TRAIN_SPLIT_TXT     = "/usr/prakt/s0012/scannetpp/splits/nvs_sem_train.txt"
 VAL_SPLIT_TXT       = "/usr/prakt/s0012/scannetpp/splits/nvs_sem_val.txt"
 TRAIN_BATCH_SCENES  = 4           # 每 epoch 随机抽 4 个 scene 训练
-VAL_BATCH_SCENES    = 2
-IMG_NUM_TRAIN       = 4           # 训练过程中，每 scene 取 几 张图进行训练
+VAL_BATCH_SCENES    = 1
+IMG_NUM_TRAIN       = 8           # 训练过程中，每 scene 取 几 张图进行训练
 IMG_NUM_AUX         = 2           # 训练过程中，每 scene 额外取 几 张图进行额外渲染。 因此一个训练scene中共取 IMG_NUM_TRAIN+IMG_NUM_AUX 张图
 AUX_WEIGHT          = 0.5
 IMG_NUM_VAL         = 4
@@ -43,10 +43,10 @@ NUM_WORKERS         = 4
 NUM_EPOCHS          = 30000
 LOG_DIR             = os.path.join(out_dir, f"runs/gauss_train_{run_id}")
 IMG_LOG_DIR         = os.path.join(out_dir, "renders", run_id)
-IMG_LOG_INTERVAL    = 1
-MODEL_PATH          = f"/home/stud/syua/storage/user/vggt-guassian/checkpoints/20250708-154652/checkpoint_epoch0301.pth"        # 要加载的预训练模型的文件地址，精确到.pth文件，无预训练模型请输入 None
+IMG_LOG_INTERVAL    = 10
+MODEL_PATH          = f"/home/stud/syua/storage/user/vggt-guassian/checkpoints/20250708-165027/gauss_head_ckpt_epoch0050.pth"        # 要加载的预训练模型的文件地址，精确到.pth文件，无预训练模型请输入 None
 CKPT_DIR            = os.path.join(out_dir, "checkpoints", run_id)  # ckpt 的保存文件夹
-CKPT_INTERVAL       = 1          # 每多少个 epoch 保存一次 ckpt
+CKPT_INTERVAL       = 25          # 每多少个 epoch 保存一次 ckpt
 
 LR_RATE             = 1e-4
 
@@ -71,7 +71,7 @@ def build_cache(loader, vggt_model):
     cache = []
     with torch.amp.autocast("cuda", dtype=dtype):
         for imgs, scene_id, img_names in loader:
-            print(f"[Select] scene {scene_id}: {', '.join(img_names)}")
+            # print(f"[Select] scene {scene_id}: {', '.join(img_names)}")
             imgs  = imgs.to(device)                       # (N,3,H,W)
             N, _, H, W = imgs.shape
             imgs_in = imgs.unsqueeze(1)
@@ -101,7 +101,7 @@ def build_cache_with_aux(loader, vggt_model):
     with torch.amp.autocast("cuda", dtype=dtype):
         for imgs_main, imgs_aux, scene_id, names_main, names_aux in loader:
             imgs_all = torch.cat([imgs_main, imgs_aux], dim=0).to(device)
-            print(f"[Select] scene {scene_id}: Main: {', '.join(names_main)}; Auxiliary: {', '.join(names_aux)}")
+            # print(f"[Select] scene {scene_id}: Main: {', '.join(names_main)}; Auxiliary: {', '.join(names_aux)}")
             N_main, _, H, W = imgs_main.shape
             tok_list_all, ps_idx_all = vggt_model.aggregator(imgs_all.unsqueeze(1))
             preds_all                = vggt_model(imgs_all)
@@ -166,6 +166,9 @@ if MODEL_PATH is not None:
     print(f"[Init] Resuming from epoch {ckpt['epoch']}, train_loss={last_train_loss:.5f}, val_loss={last_val_loss:.5f}")
 print("[Init] initialization done")
 
+vggt = VGGT.from_pretrained("facebook/VGGT-1B").eval().to(device)
+for p in vggt.parameters(): p.requires_grad = False
+
 for epoch in range(start_epoch, NUM_EPOCHS + 1):
     print(f"\n===== Epoch {epoch} =====")
 
@@ -184,14 +187,10 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
     )
 
     # ---- 2. VGGT 单次前向提特征并缓存（主+辅助） ----
-    vggt = VGGT.from_pretrained("facebook/VGGT-1B").eval().to(device)
-    for p in vggt.parameters(): p.requires_grad = False
 
     train_cache = build_cache_with_aux(train_loader, vggt)
     val_cache   = build_cache(val_loader,   vggt)
-
-    del vggt
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
 
     # ---- 3. TRAIN ----
     g_head.train()
@@ -276,8 +275,8 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
                 else: gdict[k] = v.reshape(1,-1)
 
             renders = render_gaussians(gdict, intr, extr, H, W)
-            viz_gt_val.append(imgs_aux.cpu())
-            viz_rd_val.append(renders_aux.cpu())
+            viz_gt_val.append(imgs.cpu())
+            viz_rd_val.append(renders.cpu())
             loss_val_epoch += mse_fn(renders, imgs).item()
 
     loss_val_epoch /= len(val_cache)
@@ -316,8 +315,8 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
 
 
     # ---- 6. 清理 ----
-    del train_cache, val_cache, viz_gt, viz_rd, viz_gt_val, viz_rd_val
-    gc.collect(); torch.cuda.empty_cache()
+    # del train_cache, val_cache, viz_gt, viz_rd, viz_gt_val, viz_rd_val
+    # gc.collect(); torch.cuda.empty_cache()
 
 writer.close()
 print("Training complete ✅")
