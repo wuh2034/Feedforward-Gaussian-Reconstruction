@@ -1,16 +1,42 @@
 from typing import List, Tuple, Sequence
 from torch.utils.data import DataLoader
-from dataset import SceneDataset
+from inferdataset import SceneDataset, RawDataset
+import random
+import torch
 
-# Default verbosity flag for data loaders
+# Default verbosity for loaders
 VERBOSE_DEFAULT = False
 
-# Read scene split file and return a list of scene IDs
+# Read scene split file and return list of scene IDs
 def _read_split(txt_path: str) -> List[str]:
     with open(txt_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
 
-# Build DataLoader for scene-based dataset (main views only)
+# Build DataLoader that loads all images from a single directory
+def build_loader_raw(
+    img_dir: str,
+    shuffle: bool = False,
+    num_workers: int = 4,
+    verbose: bool = VERBOSE_DEFAULT,
+) -> DataLoader:
+    dataset = RawDataset(img_dir)
+
+    def collate_fn(batch: List[Tuple[torch.Tensor, List[str]]]):
+        images, names = batch[0]
+        if verbose:
+            print(f"[DataLoader] Loaded {len(names)} images from {img_dir}", flush=True)
+        return images, names
+
+    return DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=True,
+        collate_fn=collate_fn,
+    )
+
+# Build DataLoader for scene-based dataset, returning main views only
 def build_loader(
     root_dir: str,
     scene_ids: Sequence[str],
@@ -30,7 +56,7 @@ def build_loader(
 
     return DataLoader(
         dataset,
-        batch_size=1,       # one scene per batch
+        batch_size=1,  # one scene per batch
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=True,
@@ -53,15 +79,20 @@ def build_loader_with_aux(
 
     def collate_fn(batch):
         images, scene_id, names = batch[0]
+        indices = list(range(len(images)))
+        random.shuffle(indices)
+        main_idx = indices[:img_num_main]
+        aux_idx = indices[img_num_main:]
         if verbose:
             print(f"[DataLoader] Scene: {scene_id}", flush=True)
 
-        main_images = images[:img_num_main]
-        aux_images = images[img_num_main:]
-        main_names = names[:img_num_main]
-        aux_names = names[img_num_main:]
-
-        return main_images, aux_images, scene_id, main_names, aux_names
+        return (
+            images[main_idx],      # main images
+            images[aux_idx],       # auxiliary images
+            scene_id,
+            [names[i] for i in main_idx],
+            [names[i] for i in aux_idx],
+        )
 
     return DataLoader(
         dataset,
@@ -72,8 +103,7 @@ def build_loader_with_aux(
         collate_fn=collate_fn,
     )
 
-# Build training and validation DataLoaders based on split files
-
+# Build training and validation DataLoaders
 def build_train_val(
     root_dir: str,
     train_split_txt: str,
@@ -87,9 +117,9 @@ def build_train_val(
     stride: int = 3,
     num_workers: int = 4,
 ) -> Tuple[DataLoader, DataLoader]:
-    # Training loader
+    # Prepare training scenes
     all_train_ids = _read_split(train_split_txt)
-    train_ids = train_scene_subset or all_train_ids
+    train_ids = train_scene_subset if train_scene_subset is not None else all_train_ids
 
     if train_img_aux > 0:
         train_loader = build_loader_with_aux(
@@ -111,9 +141,9 @@ def build_train_val(
             num_workers=num_workers,
         )
 
-    # Validation loader
+    # Prepare validation scenes
     all_val_ids = _read_split(val_split_txt)
-    val_ids = val_scene_subset or all_val_ids
+    val_ids = val_scene_subset if val_scene_subset is not None else all_val_ids
 
     if val_img_aux > 0:
         val_loader = build_loader_with_aux(

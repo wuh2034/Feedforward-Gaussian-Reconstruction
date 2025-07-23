@@ -39,10 +39,10 @@
 # # export PATH=$CUDA_HOME/bin:$PATH
 
 # #安装gsplat前再执行一遍
-# # export TORCH_CUDA_ARCH_LIST="8.6"
-# # export TORCH_CUDA_ARCH_LIST="8.9;8.0;7.5"
-# # export CUDA_HOME=$CONDA_PREFIX
-# # export PATH=$CUDA_HOME/bin:$PATH
+# export TORCH_CUDA_ARCH_LIST="8.6"
+# export TORCH_CUDA_ARCH_LIST="8.9;8.0;7.5"
+# export CUDA_HOME=$CONDA_PREFIX
+# export PATH=$CUDA_HOME/bin:$PATH
 # #安装gsplat命令:
 # # pip install --no-build-isolation --no-cache-dir git+https://github.com/nerfstudio-project/gsplat.git
 
