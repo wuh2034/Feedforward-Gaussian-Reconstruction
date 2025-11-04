@@ -12,6 +12,7 @@ Features:
 - Differentiable Gaussian rendering
 - Multi-loss training (MSE, LPIPS, SSIM)
 - Complete training and inference pipeline
+<img width="1030" height="473" alt="image" src="https://github.com/user-attachments/assets/7670aa91-8812-4954-9962-82a009b99c6d" />
 
 ## Environment Setup
 
