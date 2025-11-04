@@ -76,6 +76,7 @@ def viser_wrapper(
 
     extrinsics_cam = pred_dict["extrinsic"]  # (S, 3, 4)
     intrinsics_cam = pred_dict["intrinsic"]  # (S, 3, 3)
+    print(extrinsics_cam)
 
     # Compute world points from depth if not using the precomputed point map
     if not use_point_map:
@@ -358,10 +359,13 @@ def main():
     print("Initializing and loading VGGT model...")
     # model = VGGT.from_pretrained("facebook/VGGT-1B")
 
-    model = VGGT()
-    _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
-    model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
+    # model = VGGT()
+    # _URL = "https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt"
+    # model.load_state_dict(torch.hub.load_state_dict_from_url(_URL))
 
+    from vggt.models.vggt import VGGT
+    model = VGGT.from_pretrained("facebook/VGGT-1B")
+    
     model.eval()
     model = model.to(device)
 

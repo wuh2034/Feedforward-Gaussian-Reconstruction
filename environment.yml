@@ -1,0 +1,104 @@
+# name: 3dgs
+# variables:
+#   PIP_USE_PEP517: "1"
+#   CUDA_HOME: "$CONDA_PREFIX"
+#   TORCH_CUDA_ARCH_LIST: "8.6"
+# channels:
+#   - pytorch
+#   - conda-forge
+#   - nvidia # add
+#   - defaults
+# dependencies:
+#   - cudatoolkit=11.6
+#   - plyfile
+#   - python=3.10
+#   - pip
+#   # - pytorch=1.12.1
+#   # - torchaudio=0.12.1
+#   # - torchvision=0.13.1
+#   - pytorch=2.3.1
+#   - torchvision=0.18.1
+#   - torchaudio=2.3.1
+#   - pytorch-cuda=11.8
+#   - tqdm
+#   - cuda-nvcc=11.6
+#   - cuda-cudart-dev=11.6
+#   - cmake
+#   - ninja
+#   - gxx_linux-64=10
+#   - mkl=2024.0 
+#   - pip:
+#     - opencv-python #执行完submodule单独安装后再安一遍
+#     - joblib  #执行完submodule单独安装后再安一遍
+#     # - submodules/diff-gaussian-rasterization
+#     # - submodules/simple-knn
+#     # - submodules/fused-ssim
+
+# #安装submodule 前执行一遍
+# # export CUDA_HOME=$CONDA_PREFIX
+# # export PATH=$CUDA_HOME/bin:$PATH
+
+# #安装gsplat前再执行一遍
+# export TORCH_CUDA_ARCH_LIST="8.6"
+# export TORCH_CUDA_ARCH_LIST="8.9;8.0;7.5"
+# export CUDA_HOME=$CONDA_PREFIX
+# export PATH=$CUDA_HOME/bin:$PATH
+# #安装gsplat命令:
+# # pip install --no-build-isolation --no-cache-dir git+https://github.com/nerfstudio-project/gsplat.git
+
+
+name: 3dgs1           # 新环境名称，可自定
+variables:
+  CUDA_HOME: "$CONDA_PREFIX"
+  TORCH_CUDA_ARCH_LIST: "8.9;8.0;7.5"
+  PIP_USE_PEP517: "1"
+  PIP_EXTRA_INDEX_URL: "https://download.pytorch.org/whl/cu124"
+
+channels:
+  - pytorch                 # PyTorch 官方
+  - nvidia/label/cuda-12.4.1
+  - conda-forge
+  - defaults
+
+dependencies:
+  # ── 核心 ──────────────────────────────
+  - python=3.10
+  - cuda-toolkit=12.4.1       # 含 nvcc 12.4.1
+  - pytorch-cuda=12.4         # 固定 GPU 运行时
+  - cmake
+  - ninja
+  - gxx_linux-64=10
+  - mkl=2024.0
+  - plyfile
+  - tqdm
+  - pip
+
+  # ── pip 部分 ─────────────────────────
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu124
+      - torch==2.4.0+cu124
+      - torchvision==0.19.0+cu124
+      - torchaudio==2.4.0+cu124
+      - opencv-python
+      - joblib
+      # 可选：Flash-Attention 2
+      # - flash-attn==2.4.2   
+      # Flash‑Attention 2 请在环境创建后手动安装：pip install flash-attn==2.4.2 --no-build-isolation
+      #pip install --no-build-isolation --no-cache-dir -e submodules/simple-knn
+      #pip install --no-build-isolation --no-cache-dir -e submodules/diff-gaussian-rasterization/
+      #pip install --no-build-isolation --no-cache-dir -e submodules/fused-ssim/
+
+
+#vggt依赖
+#       # 基础科学包 & 通用工具
+      # - python -m pip install --upgrade \
+      # - numpy==1.26.1 pillow tqdm einops safetensors \
+      # - hydra-core omegaconf requests \
+      # - opencv-python scipy matplotlib trimesh
+
+# # 深度学习 & 服务/前端
+#       - python -m pip install --upgrade \
+#       - huggingface_hub gradio==5.17.1 viser==0.2.23 onnxruntime
+
+# # 额外三方项目
+#       - python -m pip install --upgrade pycolmap==3.10.0 pyceres==2.3 "git+https://github.com/jytime/LightGlue.git#egg=lightglue"
