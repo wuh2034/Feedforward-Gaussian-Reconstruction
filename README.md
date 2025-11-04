@@ -1,7 +1,7 @@
 # Feedforward Gaussian Reconstruction
 
 Feedforward Gaussian reconstruction based on VGGT (Visual Geometry Grounded Transformer).
-Fast Reconstruction, 14 views in ~1s
+Fast Reconstruction, **14 views in ~1s**
 <img width="1177" height="396" alt="image" src="https://github.com/user-attachments/assets/4aeadd33-1363-4b09-8e68-b53122fa22d7" />
 
 ## Overview
