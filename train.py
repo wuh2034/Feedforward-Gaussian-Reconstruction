@@ -151,7 +151,6 @@ for param in backbone.parameters():
 for epoch in range(start_epoch, NUM_EPOCHS + 1):
     print(f"\n===== Epoch {epoch} =====")
 
-    # Prepare DataLoaders for this epoch
     train_loader, val_loader = build_train_val(
         root_dir=ROOT_DIR,
         train_split_txt=TRAIN_SPLIT_TXT,
@@ -165,11 +164,9 @@ for epoch in range(start_epoch, NUM_EPOCHS + 1):
         num_workers=NUM_WORKERS
     )
 
-    # Construct forward pass caches
     train_cache = build_cache_with_aux(train_loader, backbone)
     val_cache = build_cache(val_loader, backbone)
 
-    # Training phase
     gaussian_head.train()
     train_loss_accum = 0.0
     viz_gt_train, viz_rd_train = [], []

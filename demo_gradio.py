@@ -55,16 +55,13 @@ def run_model(target_dir, model) -> dict:
     """
     print(f"Processing images from {target_dir}")
 
-    # Device check
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if not torch.cuda.is_available():
         raise ValueError("CUDA is not available. Check your environment.")
 
-    # Move model to device
     model = model.to(device)
     model.eval()
 
-    # Load and preprocess images
     image_names = glob.glob(os.path.join(target_dir, "images", "*"))
     image_names = sorted(image_names)
     print(f"Found {len(image_names)} images")
@@ -74,11 +71,8 @@ def run_model(target_dir, model) -> dict:
     images = load_and_preprocess_images(image_names).to(device)
     print(f"Preprocessed images shape: {images.shape}")
 
-    # Run inference
     print("Running inference...")
     
-    #这里修改成判断是否存在cuda
-    # dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
     if torch.cuda.is_available():
         cap = torch.cuda.get_device_capability()[0]
         dtype = torch.bfloat16 if cap >= 8 else torch.float16
@@ -89,31 +83,24 @@ def run_model(target_dir, model) -> dict:
         with torch.cuda.amp.autocast(dtype=dtype):
             predictions = model(images)
 
-    # Convert pose encoding to extrinsic and intrinsic matrices
     print("Converting pose encoding to extrinsic and intrinsic matrices...")
     extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
     predictions["extrinsic"] = extrinsic
     predictions["intrinsic"] = intrinsic
 
-    # Convert tensors to numpy
     for key in predictions.keys():
         if isinstance(predictions[key], torch.Tensor):
-            predictions[key] = predictions[key].cpu().numpy().squeeze(0)  # remove batch dimension
+            predictions[key] = predictions[key].cpu().numpy().squeeze(0)
 
-    # Generate world points from depth map
     print("Computing world points from depth map...")
     depth_map = predictions["depth"]  # (S, H, W, 1)
     world_points = unproject_depth_map_to_point_map(depth_map, predictions["extrinsic"], predictions["intrinsic"])
     predictions["world_points_from_depth"] = world_points
 
-    # Clean up
     torch.cuda.empty_cache()
     return predictions
 
 
-# -------------------------------------------------------------------------
-# 2) Handle uploaded video/images --> produce target_dir + images
-# -------------------------------------------------------------------------
 def handle_uploads(input_video, input_images):
     """
     Create a new 'target_dir' + 'images' subfolder, and place user-uploaded
@@ -123,12 +110,10 @@ def handle_uploads(input_video, input_images):
     gc.collect()
     torch.cuda.empty_cache()
 
-    # Create a unique folder name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     target_dir = f"input_images_{timestamp}"
     target_dir_images = os.path.join(target_dir, "images")
 
-    # Clean up if somehow that folder already exists
     if os.path.exists(target_dir):
         shutil.rmtree(target_dir)
     os.makedirs(target_dir)
@@ -136,7 +121,6 @@ def handle_uploads(input_video, input_images):
 
     image_paths = []
 
-    # --- Handle images ---
     if input_images is not None:
         for file_data in input_images:
             if isinstance(file_data, dict) and "name" in file_data:
@@ -147,7 +131,6 @@ def handle_uploads(input_video, input_images):
             shutil.copy(file_path, dst_path)
             image_paths.append(dst_path)
 
-    # --- Handle video ---
     if input_video is not None:
         if isinstance(input_video, dict) and "name" in input_video:
             video_path = input_video["name"]
@@ -171,7 +154,6 @@ def handle_uploads(input_video, input_images):
                 image_paths.append(image_path)
                 video_frame_num += 1
 
-    # Sort final images for gallery
     image_paths = sorted(image_paths)
 
     end_time = time.time()
@@ -179,9 +161,6 @@ def handle_uploads(input_video, input_images):
     return target_dir, image_paths
 
 
-# -------------------------------------------------------------------------
-# 3) Update gallery on upload
-# -------------------------------------------------------------------------
 def update_gallery_on_upload(input_video, input_images):
     """
     Whenever user uploads or changes files, immediately handle them
@@ -194,9 +173,6 @@ def update_gallery_on_upload(input_video, input_images):
     return None, target_dir, image_paths, "Upload complete. Click 'Reconstruct' to begin 3D processing."
 
 
-# -------------------------------------------------------------------------
-# 4) Reconstruction: uses the target_dir plus any viz parameters
-# -------------------------------------------------------------------------
 def gradio_demo(
     target_dir,
     conf_thres=3.0,
@@ -217,7 +193,6 @@ def gradio_demo(
     gc.collect()
     torch.cuda.empty_cache()
 
-    # Prepare frame_filter dropdown
     target_dir_images = os.path.join(target_dir, "images")
     all_files = sorted(os.listdir(target_dir_images)) if os.path.isdir(target_dir_images) else []
     all_files = [f"{i}: {filename}" for i, filename in enumerate(all_files)]
@@ -227,21 +202,17 @@ def gradio_demo(
     with torch.no_grad():
         predictions = run_model(target_dir, model)
 
-    # Save predictions
     prediction_save_path = os.path.join(target_dir, "predictions.npz")
     np.savez(prediction_save_path, **predictions)
 
-    # Handle None frame_filter
     if frame_filter is None:
         frame_filter = "All"
 
-    # Build a GLB file name
     glbfile = os.path.join(
         target_dir,
         f"glbscene_{conf_thres}_{frame_filter.replace('.', '_').replace(':', '').replace(' ', '_')}_maskb{mask_black_bg}_maskw{mask_white_bg}_cam{show_cam}_sky{mask_sky}_pred{prediction_mode.replace(' ', '_')}.glb",
     )
 
-    # Convert predictions to GLB
     glbscene = predictions_to_glb(
         predictions,
         conf_thres=conf_thres,
@@ -255,7 +226,6 @@ def gradio_demo(
     )
     glbscene.export(file_obj=glbfile)
 
-    # Cleanup
     del predictions
     gc.collect()
     torch.cuda.empty_cache()
@@ -267,9 +237,6 @@ def gradio_demo(
     return glbfile, log_msg, gr.Dropdown(choices=frame_filter_choices, value=frame_filter, interactive=True)
 
 
-# -------------------------------------------------------------------------
-# 5) Helper functions for UI resets + re-visualization
-# -------------------------------------------------------------------------
 def clear_fields():
     """
     Clears the 3D viewer, the stored target_dir, and empties the gallery.
@@ -341,10 +308,6 @@ def update_visualization(
     return glbfile, "Updating Visualization"
 
 
-# -------------------------------------------------------------------------
-# Example images
-# -------------------------------------------------------------------------
-
 great_wall_video = "examples/videos/great_wall.mp4"
 colosseum_video = "examples/videos/Colosseum.mp4"
 room_video = "examples/videos/room.mp4"
@@ -355,9 +318,6 @@ single_oil_painting_video = "examples/videos/single_oil_painting.mp4"
 pyramid_video = "examples/videos/pyramid.mp4"
 
 
-# -------------------------------------------------------------------------
-# 6) Build Gradio UI
-# -------------------------------------------------------------------------
 theme = gr.themes.Ocean()
 theme.set(
     checkbox_label_background_fill_selected="*button_primary_background_fill",
@@ -442,7 +402,6 @@ with gr.Blocks(
         </details>
         </li>
     </ol>
-    <p><strong style="color: #0ea5e9;">Please note:</strong> <span style="color: #0ea5e9; font-weight: bold;">VGGT typically reconstructs a scene in less than 1 second. However, visualizing 3D points may take tens of seconds due to third-party rendering, which are independent of VGGT's processing time. </span></p>
     </div>
     """
     )
@@ -496,7 +455,6 @@ with gr.Blocks(
                     mask_black_bg = gr.Checkbox(label="Filter Black Background", value=False)
                     mask_white_bg = gr.Checkbox(label="Filter White Background", value=False)
 
-    # ---------------------- Examples section ----------------------
     examples = [
         [colosseum_video, "22", None, 20.0, False, False, True, False, "Depthmap and Camera Branch", "True"],
         [pyramid_video, "30", None, 35.0, False, False, True, False, "Depthmap and Camera Branch", "True"],
@@ -561,13 +519,6 @@ with gr.Blocks(
         examples_per_page=50,
     )
 
-    # -------------------------------------------------------------------------
-    # "Reconstruct" button logic:
-    #  - Clear fields
-    #  - Update log
-    #  - gradio_demo(...) with the existing target_dir
-    #  - Then set is_example = "False"
-    # -------------------------------------------------------------------------
     submit_btn.click(fn=clear_fields, inputs=[], outputs=[reconstruction_output]).then(
         fn=update_log, inputs=[], outputs=[log_output]
     ).then(
@@ -584,12 +535,9 @@ with gr.Blocks(
         ],
         outputs=[reconstruction_output, log_output, frame_filter],
     ).then(
-        fn=lambda: "False", inputs=[], outputs=[is_example]  # set is_example to "False"
+        fn=lambda: "False", inputs=[], outputs=[is_example]
     )
 
-    # -------------------------------------------------------------------------
-    # Real-time Visualization Updates
-    # -------------------------------------------------------------------------
     conf_thres.change(
         update_visualization,
         [
@@ -696,9 +644,6 @@ with gr.Blocks(
         [reconstruction_output, log_output],
     )
 
-    # -------------------------------------------------------------------------
-    # Auto-update gallery whenever user uploads or changes their files
-    # -------------------------------------------------------------------------
     input_video.change(
         fn=update_gallery_on_upload,
         inputs=[input_video, input_images],

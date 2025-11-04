@@ -21,9 +21,6 @@ from einops import rearrange
 import lpips
 from torchmetrics.image import StructuralSimilarityIndexMeasure as SSIM
 
-# -----------------------------------------------------------------------------
-# 1) Dataset & DataLoader
-# -----------------------------------------------------------------------------
 class ImageDataset(Dataset):
     def __init__(self, paths, tfm=None):
         self.paths, self.tfm = paths, tfm or transforms.ToTensor()
@@ -68,9 +65,6 @@ print("Found", len(paths), "images")
 dataset    = ImageDataset(paths, tfm=load_and_preprocess_images)
 dataloader = DataLoader(dataset, batch_size=8, shuffle=False)  # no shuffle for caching
 
-# -----------------------------------------------------------------------------
-# 2) 初始化 VGGT 并缓存特征
-# -----------------------------------------------------------------------------
 vggt = VGGT.from_pretrained("facebook/VGGT-1B").eval().to(device)
 for p in vggt.parameters(): p.requires_grad = False
 
@@ -96,7 +90,7 @@ with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
 
     # Save the embedding dimension before deleting the VGGT object
     embed_dim = vggt.embed_dim
-# ---------- 释放显存 ----------
+
 for entry in cache:
     for k, v in entry.items():
         if torch.is_tensor(v):
@@ -106,11 +100,7 @@ for entry in cache:
 del vggt                      # 释放 VGGT 模型占用的显存
 torch.cuda.empty_cache()
 gc.collect()
-# ---------- 释放显存 ----------
 
-# -----------------------------------------------------------------------------
-# 3) 构造 Gaussian Head & 训练循环
-# -----------------------------------------------------------------------------
 sh_degree = 0
 out_dim   = 3 + 3 + 4 + 3*(sh_degree+1)**2 + 1
 g_head = Gaussianhead(
@@ -148,19 +138,18 @@ for epoch in range(1, 30000):
         # Gaussian head 前向
         gdict_raw = g_head(tok_list, imgs.unsqueeze(1), ps_idx, point_map)
         gdict     = flatten_gdict(gdict_raw, B)
-        #         # ========= 方案 B：在线随机 drop 高斯 =========
-        # drop_ratio = 0.5                                    # 想保留多少比例就调这里
-        # N_total     = gdict["opacities"].shape[1]           # 每张图当前的高斯数
+        # 方案 B：在线随机 drop 高斯
+        # drop_ratio = 0.5                                    
+        # N_total     = gdict["opacities"].shape[1]           
         # keep_mask   = torch.rand(
         #     N_total, device=gdict["opacities"].device
-        # ) >= drop_ratio                                     # True 表示保留
+        # ) >= drop_ratio                                     
 
         # # 对 gdict 里所有键统一子采样：
         # # - 非 SH 通道形状 (B, N, C)           → gdict[k][:, keep_mask,  ...]
         # # - SH  通道形状 (B, N, K, 3)          → gdict[k][:, keep_mask, ...]
         # for k in gdict:
         #     gdict[k] = gdict[k][:, keep_mask, ...]
-        # # =============================================
         # renders   = render_gaussians(gdict, sh_degree,intr, extr, H, W)
 
         # # 损失
@@ -178,10 +167,10 @@ for epoch in range(1, 30000):
         # opt.step()
         
         opt.zero_grad(set_to_none=True)
-        with torch.autograd.detect_anomaly():                # ⬅️ 前向也包进来
+        with torch.autograd.detect_anomaly():                
             renders = render_gaussians(gdict, sh_degree, intr, extr, H, W)
 
-            # ---------- 损失 ----------
+            #损失
             mse_loss = crit(renders, imgs)
             with torch.amp.autocast("cuda", dtype=dtype):
                 renders_n  = renders * 2 - 1
@@ -193,7 +182,7 @@ for epoch in range(1, 30000):
 
             loss.backward()
 
-        # --------- 新增梯度裁剪 ----------
+        # 新增梯度裁剪
         torch.nn.utils.clip_grad_norm_(g_head.parameters(), 1.0)
         opt.step()
 

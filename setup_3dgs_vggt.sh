@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-###############################################################################
+
 # 3D Gaussian Splatting  +  vggt  统一环境安装脚本（CUDA 12.4 / PyTorch 2.3.1）
 # Author: ChatGPT (2025-06-15)
 # Usage : bash setup_3dgs_vggt.sh
-###############################################################################
+
 set -euo pipefail
 
-##################### 可选参数 ##################################################
 ENV_NAME=${ENV_NAME:-vggt-3dgs}           # Conda 环境名
 TORCH_VER=2.4.1+cu124                      # PyTorch / cu124 版本号
 TVISION_VER=0.19.1+cu124                   # torchvision
 TAUDIO_VER=2.4.1+cu124                     # torchaudio
 CUDA_TOOLKIT_LABEL=nvidia/label/cuda-12.4.1
 EXTRA_INDEX=https://download.pytorch.org/whl/cu124
-###############################################################################
 
 echo "=== [0/8] Conda 环境准备：$ENV_NAME ========================================"
 # Conda base 环境初始化
@@ -104,5 +102,4 @@ print("Flash-Attn 2 ✔", hasattr(fa, "flash_attn_bwd"))
 PY
 
 echo -e "\n=== [8/8] 环境部署完成！ ================================================"
-echo "🎉  3DGS + vggt 统一环境已就绪！"
-echo "👉  记得：conda activate $ENV_NAME  后再运行你的脚本。"
+echo "3DGS + vggt 统一环境已就绪！"

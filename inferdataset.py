@@ -20,12 +20,10 @@ class RawDataset(Dataset):
         self.transform = transform
 
     def __len__(self) -> int:
-        # Dataset has a single sample containing all images
         return 1
 
     def __getitem__(self, idx: int):
-        # idx is ignored; always return all images
-        imgs = self.transform(self.img_paths)  # shape: (N, 3, H, W), float32, range [0,1]
+        imgs = self.transform(self.img_paths)
         names = [os.path.basename(p) for p in self.img_paths]
         return imgs, names
 
@@ -76,6 +74,6 @@ class SceneDataset(Dataset):
         selected = self._sample_indices(len(img_paths))
         selected_paths = [img_paths[i] for i in selected]
         img_names = [os.path.basename(p) for p in selected_paths]
-        imgs = self.transform(selected_paths)  # shape: (img_num, 3, H, W), float32, range [0,1]
+        imgs = self.transform(selected_paths)
 
         return imgs, scene_id, img_names

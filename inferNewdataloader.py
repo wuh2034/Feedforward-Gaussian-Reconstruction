@@ -4,15 +4,12 @@ from inferdataset import SceneDataset, RawDataset
 import random
 import torch
 
-# Default verbosity for loaders
 VERBOSE_DEFAULT = False
 
-# Read scene split file and return list of scene IDs
 def _read_split(txt_path: str) -> List[str]:
     with open(txt_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
 
-# Build DataLoader that loads all images from a single directory
 def build_loader_raw(
     img_dir: str,
     shuffle: bool = False,
@@ -36,7 +33,6 @@ def build_loader_raw(
         collate_fn=collate_fn,
     )
 
-# Build DataLoader for scene-based dataset, returning main views only
 def build_loader(
     root_dir: str,
     scene_ids: Sequence[str],
@@ -56,14 +52,13 @@ def build_loader(
 
     return DataLoader(
         dataset,
-        batch_size=1,  # one scene per batch
+        batch_size=1,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=True,
         collate_fn=collate_fn,
     )
 
-# Build DataLoader for scene-based dataset with main and auxiliary views
 def build_loader_with_aux(
     root_dir: str,
     scene_ids: Sequence[str],
@@ -87,8 +82,8 @@ def build_loader_with_aux(
             print(f"[DataLoader] Scene: {scene_id}", flush=True)
 
         return (
-            images[main_idx],      # main images
-            images[aux_idx],       # auxiliary images
+            images[main_idx],
+            images[aux_idx],
             scene_id,
             [names[i] for i in main_idx],
             [names[i] for i in aux_idx],
@@ -103,7 +98,6 @@ def build_loader_with_aux(
         collate_fn=collate_fn,
     )
 
-# Build training and validation DataLoaders
 def build_train_val(
     root_dir: str,
     train_split_txt: str,
@@ -117,7 +111,6 @@ def build_train_val(
     stride: int = 3,
     num_workers: int = 4,
 ) -> Tuple[DataLoader, DataLoader]:
-    # Prepare training scenes
     all_train_ids = _read_split(train_split_txt)
     train_ids = train_scene_subset if train_scene_subset is not None else all_train_ids
 
@@ -141,7 +134,6 @@ def build_train_val(
             num_workers=num_workers,
         )
 
-    # Prepare validation scenes
     all_val_ids = _read_split(val_split_txt)
     val_ids = val_scene_subset if val_scene_subset is not None else all_val_ids
 

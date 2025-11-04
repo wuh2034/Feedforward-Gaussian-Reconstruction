@@ -1,4 +1,4 @@
-# train.py  ────────────────────────────────────────────────────────────────────
+
 import os, glob, torch, time
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -17,7 +17,6 @@ import lpips
 from torchmetrics import StructuralSimilarityIndexMeasure as SSIM
 import gc; gc.collect()
 
-# --------------------------- dataset -----------------------------------------
 class ImageDataset(Dataset):
     def __init__(self, paths, tfm=None):
         self.paths, self.tfm = paths, tfm or transforms.ToTensor()
@@ -31,10 +30,8 @@ class ImageDataset(Dataset):
         else:
             img = self.tfm(img)
         return img
-# -----------------------------------------------------------------------------
 
 
-# --------------------------- util --------------------------------------------
 def flatten_gdict(gdict: dict, B: int):
     """
     (B,S,H,W,C) flatten → (B, N, C)
@@ -44,7 +41,6 @@ def flatten_gdict(gdict: dict, B: int):
         C = v.shape[-1] if v.ndim >= 2 else 1
         out[k] = v.reshape(B, -1, C)             # (B,N,C)             
     return out
-# -----------------------------------------------------------------------------
 
 writer_path = "runs/gauss_train_9"
 img_log_path = "renders/gauss_train_10"
@@ -138,7 +134,6 @@ for epoch in range(1, 50000):
         B, C, H, W = imgs.shape
         imgs_in   = imgs.unsqueeze(1)     
 
-        # ---- rearrange  B=1, C=B  -------------------------------------------
         # extr : (1, B, 3, 4)  → pad → (1, B, 4, 4)
         pad_row = torch.tensor([0, 0, 0, 1],
                                device=extr.device,
@@ -148,7 +143,6 @@ for epoch in range(1, 50000):
         # intr : (1, B, 3, 3)
         intr = intr.float()
         
-        # ----- Gaussian Head -------------------------------------------------
         gdict_raw = g_head(tok_list, imgs_in, ps_idx, point_map)
         gdict = flatten_gdict(gdict_raw, B)
         '''
@@ -167,10 +161,8 @@ for epoch in range(1, 50000):
             else:                  # opacities (...,1) 
                 gdict[k] = v.reshape(1, -1)
                 
-        # ----- diff rendering -------------------------------------------------------
         renders = render_gaussians(gdict, intr, extr, H, W)                  # (B,3,H,W)
 
-        # ----- loss & bp ------------------------------------------------------
         with torch.amp.autocast("cuda", dtype=dtype):
             # apply channel weights to MSE
             weights = torch.tensor([1.0, 1.0, 1.0], device=device).view(1,3,1,1)
@@ -195,7 +187,6 @@ for epoch in range(1, 50000):
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
-        # ----- log -----------------------------------------------------------
         epoch_loss += loss.item()
         writer.add_scalar("loss/batch", loss.item(), global_step)
         writer.add_scalar("mse/batch", mse_loss.item(), global_step)

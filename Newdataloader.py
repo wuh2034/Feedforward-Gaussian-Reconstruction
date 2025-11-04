@@ -2,15 +2,12 @@ from typing import List, Tuple, Sequence
 from torch.utils.data import DataLoader
 from dataset import SceneDataset
 
-# Default verbosity flag for data loaders
 VERBOSE_DEFAULT = False
 
-# Read scene split file and return a list of scene IDs
 def _read_split(txt_path: str) -> List[str]:
     with open(txt_path, 'r') as f:
         return [line.strip() for line in f if line.strip()]
 
-# Build DataLoader for scene-based dataset (main views only)
 def build_loader(
     root_dir: str,
     scene_ids: Sequence[str],
@@ -30,14 +27,13 @@ def build_loader(
 
     return DataLoader(
         dataset,
-        batch_size=1,       # one scene per batch
+        batch_size=1,
         shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=True,
         collate_fn=collate_fn,
     )
 
-# Build DataLoader for scene-based dataset with main and auxiliary views
 def build_loader_with_aux(
     root_dir: str,
     scene_ids: Sequence[str],
@@ -72,8 +68,6 @@ def build_loader_with_aux(
         collate_fn=collate_fn,
     )
 
-# Build training and validation DataLoaders based on split files
-
 def build_train_val(
     root_dir: str,
     train_split_txt: str,
@@ -87,7 +81,6 @@ def build_train_val(
     stride: int = 3,
     num_workers: int = 4,
 ) -> Tuple[DataLoader, DataLoader]:
-    # Training loader
     all_train_ids = _read_split(train_split_txt)
     train_ids = train_scene_subset or all_train_ids
 
@@ -111,7 +104,6 @@ def build_train_val(
             num_workers=num_workers,
         )
 
-    # Validation loader
     all_val_ids = _read_split(val_split_txt)
     val_ids = val_scene_subset or all_val_ids
 
