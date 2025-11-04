@@ -79,7 +79,8 @@ View training progress:
 tensorboard --logdir runs/gauss_train_{timestamp}
 ```
 
-## Inference
+## Inference compared to SOTA
+<img width="496" height="186" alt="image" src="https://github.com/user-attachments/assets/32b9000c-5072-4bfd-9bf9-96bdc6d482eb" />
 
 ### Usage
 
